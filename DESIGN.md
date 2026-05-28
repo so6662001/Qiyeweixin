@@ -1,9 +1,9 @@
-# 企业微信机器人 — 设计文档（v6）
+# 企业微信机器人 — 设计文档（v7）
 
 > 状态：设计阶段（尚未开发）
 > 行业：**钢铁贸易**
 > 目标：搭建一个企业微信智能机器人，对接 8 项后端能力，覆盖内部员工和外部微信客户，接入 LLM（DeepSeek / 通义千问，含 VL 视觉模型）。
-> **v6 核心**：把"询价 → 销售单干报价"升级为「**自动/辅助/人工」三档报价 + 客户画像引擎 + 报价策略引擎 + 库存组合匹配 + 行为干预**」。
+> **v7 核心**：在 v6 报价策略基础上，新增**多轮议价（讨价还价）能力**，含让步曲线、整单利润优化、8 维让步生成、议价话术 LLM。
 
 ---
 
@@ -15,825 +15,892 @@
 | 2 | 业务 API 不可改 | ACL |
 | 3 | 必须绑定 | 数据级权限 |
 | 4 | 多轮、跨天、多意图 | Topic + Task |
-| 5 | 公网云、域名已备案 | 云原生 |
+| 5 | 公网云 | 云原生 |
 | 6 | 钢铁贸易 | 强权限 + DLP + 审计 |
-| 7 | DeepSeek + 通义千问 | LLM 双路由 |
-| 8 | 8 项后端能力 | 工单 + 反向回调 + 文件管道 |
-| 9 | 询价 4 形态 | 多模态解析 + VL |
+| 7 | DeepSeek + 通义千问 | LLM 双路由（含 VL） |
+| 8 | 8 项能力 | 工单 + 反向回调 + 文件管道 |
+| 9 | 询价 4 形态 | 多模态解析 |
 | 10 | 询价 9 要素口语化 | KB + 默认推断 + 字段级溯源 |
-| **11（v6 新）** | **多库存/多价格、客户特性差异、量级分层、MOQ、黑白名单、白嫖客户管理** | **报价策略引擎 + 客户画像引擎 + 三档协作 + 行为干预** |
+| 11 | 多库存 + 客户特性 + MOQ + 黑白名单 + 白嫖客户 | 三档报价 + 画像引擎 + 策略引擎 + 5 层干预 |
+| **12（v7 新）** | **多轮讨价还价 + 整单利润 + 求利/求量差异化议价** | **议价状态机 + 让步策略 + 整单优化 + 多维让步 + 议价 LLM** |
 
 ---
 
 ## 1. 需求与目标
 
-### 1.1~1.4 同 v5
+### 1.1~1.5 同 v6
 略。
 
-### 1.5 报价决策矩阵（v6 核心）
+### 1.6 议价业务本质（v7 核心认知）
 
-#### 1.5.1 三档协作模型
+#### 1.6.1 客户砍价的 6 种姿势
 
-| 档位 | 触发条件 | 谁出价 | 客户体感 |
+| 姿势 | 客户话术 | 应对核心 |
+|---|---|---|
+| 直接砍价 | "便宜点 3750 吧" | 让步曲线 + 价值替代 |
+| 竞品施压 | "X 家给我报 3780" | 真假验证 + 差异化论证 |
+| 条件交换 | "再降 10 我就下" | 抓成交意图 + 锁条件 |
+| 量价互换 | "加 20t 再降 5" | 量阶梯激励 |
+| 多维要求 | "送货 + 账期 + 降价" | 拆分让步、分维度处理 |
+| 整单打包 | "三品种一起来个底价" | 整单利润优化 |
+
+#### 1.6.2 让步的 8 种货币（不只价格）
+
+| 维度 | 成本 | 客户敏感度 | 备注 |
 |---|---|---|---|
-| **A. 即时自动报价 (Auto)** | 白/标准客户 ∧ 标准品 ∧ 量在阈值内 ∧ 库存充足 ∧ 风险低 | Bot 直接出 | 秒级响应 |
-| **B. 辅助报价 (Assisted)** | 大多数情况 | Bot 出**建议方案**→销售一键确认/调整→回客户 | 几分钟内 |
-| **C. 人工报价 (Manual)** | 黑名单 / 超大单 / 非标 / 复杂组合 / 信用警告 | 销售全程，Bot 仅传话 | 30 min 内 |
+| 价 | 直接侵蚀毛利 | ★★★★★ | 最敏感，谨慎用 |
+| 量 | 用量补毛利 | ★★★★ | 量阶梯绑定 |
+| 时 | 时间/行情风险 | ★★★ | 锁价延长 |
+| 运 | 运费成本 | ★★★ | 免/补运费 |
+| 期 | 资金占用 | ★★★ | 账期延长（须信用支持） |
+| 质 | 库存损耗 | ★★ | 升优级品同价 |
+| 赠 | 接近零成本 | ★ | 材质书、优先发车、优先供应 |
+| 组 | 整体优化 | ★★★ | 整单打包 |
 
-**判定流程**：
-```
-parse_inquiry 完成
-   ↓
-风险评估（5 项）：
-  1. 客户名单（白/普/黑）
-  2. 客户信用（正常/警告/冻结）
-  3. 单笔总额 vs 阈值
-  4. 品类是否标准品
-  5. 是否需要锁价/账期
-   ↓
-→ Manual：任一红灯
-→ Auto：全绿灯 + 白名单/老客 + 量 ≤ 阈值
-→ Assisted：其余
-```
+**老销售经验**：保毛利的关键是把"降价"换成"价值替代"。Bot 必须把这 8 种让步当工具箱，不只盯着第一格。
 
-#### 1.5.2 策略选择矩阵
+#### 1.6.3 客户类型 × 议价节奏
 
-| 客户类型 → | 新客 | 量型 | 利型 | 战略 | 流失 |
-|---|---|---|---|---|---|
-| **白名单** | 入门优惠 + 短锁价 | 量优底价 + 长锁价 | 质优策略 + 标准锁价 | 战略价 + 超长锁价 | 唤回价 + 限时 |
-| **普通** | 标准价 + 短锁价 | 量阶梯 + 标准锁价 | 质优策略 | 战略价 | 标准价 + 销售跟进 |
-| **黑名单** | 拒报 / 转销售 | 上浮 5%~20% + 现款 | 上浮 + 现款 | （不应存在） | 拒报 |
+| 客户类型 | 议价偏好 | 推荐让步货币 | 让步节奏 |
+|---|---|---|---|
+| 求利型（旧称"利型"在 v6） | 每分钱都要 | 价 + 赠 + 组 | 慢让、递减、末端价值替代 |
+| 求量型（旧称"量型"在 v6） | 愿意加量换价 | 量 + 价绑定 + 阶梯 | 用量解锁价格 |
+| 战略型 | 要稳定供应 | 时 + 期 + 组 | 一次给痛快 + 框架协议 |
+| 新客 | 看诚意又怕被宰 | 价（首单明牌）+ 赠 | 一次报到位，不缠斗 |
+| 流失型 | 关心是否被重视 | 价 + 赠 + 销售关怀 | 唤回价 + 限时 |
 
-#### 1.5.3 量级策略
+> v7 把 v6 的 "profit/volume" 客户类型重命名为更直观的 **求利型 / 求量型**，与中文业务语境一致。
 
-| 询价量 / 整单量 | 处理 |
-|---|---|
-| 量 < 品类 MOQ | 标"**不过磅销售**"（按支/根/件计费） |
-| MOQ ≤ 量 < 标准段 | 标准报价（按吨过磅） |
-| 量 ≥ 大宗阈值 | 阶梯优惠 + 可锁价更长 |
-| **没有量（纯询价）** | 出**指导价 (indicative)** + 注明"实际成交以提货时为准" |
-| 多规格组合询价 | 总量合并算阶梯（按客户类型决定） |
+#### 1.6.4 整单利润视角（v7 重点）
 
----
-
-## 2. 通道选型 / 3. 总体架构（v5 基础 + v6 新模块）
+客户询单 = N 个 item，每个 item 有自己的毛利空间。议价时不能只看当前 item，要看**整单毛利**：
 
 ```
-   ...省略前置（Callback / Channel / Identity / Permission / Router / Session / LLM / Tools / ACL / Reply / WeCom）...
+示例：客户要 3 个品种
+  螺纹  50t  毛利 ¥150/t（薄）
+  工字钢 30t  毛利 ¥320/t（厚）
+  中板  20t  毛利 ¥220/t（中）
+整单毛利总额 ¥21,500，毛利率 5.6%
 
-   ─────────── v6 新增模块 ───────────
+客户砍："螺纹再降 30"
 
-   ⑨ Customer Profile Engine（客户画像引擎）
-      - 自动分类：新客/量型/利型/战略/流失
-      - 名单：白/普/黑（黑名单分级）
-      - 信用：正常/警告/冻结
-      - 行为画像：转化率/平均吨位/DSO/品类集中/白嫖系数
-      - 销售可手动覆盖
-      - 周期更新（小时 + 实时事件）
+5 种应对（让步分配方案）：
+  A. 螺纹直接降 30 → 螺纹毛利薄到 ¥120/t（求利型可接受）
+  B. 螺纹保价，中板让 50 → 整单让 ¥1,000，客户视觉上让得更多
+  C. 螺纹 10 + 工字 20 + 中板 10 → 整单让 ¥1,400，各项都让
+  D. 整单一口价 ¥382,500 → 让 ¥1,500（求战略客户喜欢）
+  E. 量价绑定："螺纹加到 70t 再让 20" → 求量型激励
 
-   ⑩ Pricing Strategy Engine（报价策略引擎）
-      - 输入：InquiryItem + customer_profile + inventory_options
-      - 策略库（可配置规则）：
-          new_customer_attractive
-          volume_driven_lowest
-          profit_quality_first
-          strategic_anchor
-          churn_callback
-          blacklist_uplift / cash_only / refuse
-          whitelist_discount
-          moq_unweighed
-          no_qty_indicative
-          repeat_inquiry_quote_reuse
-          explorer_throttle
-          ghost_minimum
-      - 输出：QuoteOption[] + price_breakdown + valid_until + 备注
-
-   ⑪ Inventory Matcher（库存组合匹配）
-      - 同规格多库存源（仓库/批次/品质）
-      - 组合优化：单源最便宜 vs 多源拼单 vs 含运费总成本
-      - MOQ 校验 + 不过磅模式
-
-   ⑫ Conversion Behavior Tracker（行为漏斗追踪）
-      - 询价→报价→锁价→下单 漏斗
-      - 时间窗口指标（7/30/90 天）
-      - 自动分类信号 + 异常告警
-
-   ⑬ Soft Influence Module（软影响 / 行为干预）
-      - 回执话术按客户画像差异化
-      - 锁价时长差异化
-      - 重复询价压制
-      - 销售介入触发
-      - 5 层渐进式机制（详见 5.21）
+Order-level Profit Optimizer 按 (客户类型 + 议价轮次 + 各项 headroom) 推荐 1~2 个方案给销售
 ```
 
 ---
 
-## 4. 关键流程（v6 重写询价报价闭环）
-
-### 4.2 询价 → 报价 全链路（v6 重写）
+## 2. 通道选型 / 3. 总体架构（v6 基础 + v7 新模块）
 
 ```
-═══ 阶段 A：解析（v4/v5）═════════════════════════════════════
-parse_inquiry：文字/图/Excel/PDF → InquiryDraft → 客户确认
+   ...（v1~v6 模块同前）...
 
-═══ 阶段 B：客户画像注入 (v6) ═════════════════════════════════
-Customer Profile Engine 查：
-  profile = {
-    type: 量型, list: 普通, credit: 正常,
-    behavior: {
-      inquiry_30d: 12, deal_30d: 2, conversion_rate: 0.17,
-      avg_ton: 80, dso_days: 45, profit_margin_hist: 4.2%,
-      categories_dominant: [螺纹钢, 中厚板],
-      ghost_score: 0.62,    // 越高越像白嫖
-    }
+   ─────────── v7 新增议价模块 ───────────
+
+   ⑭ Negotiation Session Manager（议价会话管理器）
+      - 状态机：OPENING → COUNTERED → CONCEDED → AGREED / IMPASSE / ESCALATED
+      - 每轮 offer 历史（双方）
+      - 各 item 让步累计
+      - 触发议价/退出议价的判定
+
+   ⑮ Concession Strategy Engine（让步策略引擎）
+      - 按客户类型 × 当前轮次 → 让步曲线
+      - 让步预算管理（max_concession = current_margin - min_margin）
+      - 让步幅度递减原则
+      - 让步节奏（求利型慢让，求量型量绑定，战略型一次到位）
+
+   ⑯ Order-level Profit Optimizer（整单利润优化器）
+      - 视角：整单 vs 单 item
+      - 跨 item 让步分配（保护薄毛利项，让厚毛利项让）
+      - 整单底线 + 整单加权毛利率
+      - 推荐 1~2 个让步方案给销售
+
+   ⑰ Counter-offer Generator（多维反报价生成器）
+      - 8 种让步货币（价/量/时/运/期/质/赠/组）
+      - 组合搜索（在让步预算内找等价组合）
+      - 按客户敏感度排序：求利型先价，求量型先量，战略型先时/期/组
+
+   ⑱ Bargaining LLM Layer（议价话术 LLM）
+      - 上下文：议价历史 + 客户画像 + 让步预算 + 推荐方案
+      - 输出话术：礼貌、留余地、不卑不亢、不漏底
+      - 按客户类型切换语气（求利型聊性价比，求量型聊增量收益，战略型聊长期）
+
+   ─────────── 与 v6 的衔接 ───────────
+   议价模块在 v6「报价档位 (Auto/Assisted/Manual)」之后激活：
+     Auto    → 客户砍价 → 直接跳 Assisted（销售介入）
+     Assisted → 议价引擎为销售出方案 → 销售确认
+     Manual  → 销售全程，Bot 仅记录议价历史 + 提示
+```
+
+---
+
+## 4. 关键流程（v7 新增议价流程）
+
+### 4.2 询价 → 报价（v6 流程不变）
+
+略。
+
+### 4.8 议价（v7 新增）
+
+```
+═══ 触发议价 ═══════════════════════════════════════════════
+客户对 Bot 已发出的报价做出非接受响应：
+  - "便宜点"  / "再降 X" / "X 家 3780"
+  - "再加 20t 行不行" / "送货吗" / "锁久点"
+   ↓
+LLM 意图识别 → 进入 NEGOTIATION
+   ↓
+Negotiation Session 状态：OPENING → COUNTERED
+
+═══ 阶段 1：解析客户 offer ════════════════════════════════
+LLM 抽取议价要素：
+  - 砍价幅度（绝对 / 相对）
+  - 砍价目标 item（默认当前 item，或客户明确指定）
+  - 附加条件（量、时、运、期、质等）
+  - 提及的竞品（如有）→ 记录到 leads
+   ↓
+归一化为 CustomerOffer 结构：
+  {
+    round: 2,
+    target_item_id: ITEM-001,
+    proposed_price: 3780,
+    proposed_qty: 50 (不变),
+    requested_terms: ["送货","账期30"],
+    competitor_mentioned: "X家 3780",
+    tone: 强硬 | 试探 | 友好
   }
 
-═══ 阶段 C：风险评估 + 档位判定 (v6) ═══════════════════════════
-risk = {
-  list_red: false,        // 黑名单
-  credit_red: false,      // 信用警告/冻结
-  amount_red: false,      // 单笔 > 500w
-  nonstandard: false,     // 非标规格
-  needs_lock: false       // 客户要求锁价
-}
-→ 档位 = Assisted（默认）
+═══ 阶段 2：客户画像 + 议价历史 ════════════════════════════
+Customer Profile + Negotiation Session 提供：
+  - 客户类型（求利/求量/战略/新客/流失）
+  - 历史议价转化率
+  - 当前 Topic 中议价轮次（第几轮）
+  - 已让步累计 vs 让步预算
+  - 整单 items 及各项 headroom
 
-═══ 阶段 D：库存匹配 (v6) ════════════════════════════════════
-Inventory Matcher 查：
-  options = [
-    {warehouse:'武汉江夏', stock_ton:30, base_price:3820, attrs:'标准品'},
-    {warehouse:'武汉江夏', stock_ton:50, base_price:3790, attrs:'倍尺'},
-    {warehouse:'襄阳',     stock_ton:100,base_price:3750, attrs:'长锈轻锈'},
-    {warehouse:'武汉江岸', stock_ton:20, base_price:3850, attrs:'优级'}
-  ]
+═══ 阶段 3：让步策略选择 ═════════════════════════════════
+Concession Strategy Engine 算：
 
-═══ 阶段 E：策略应用 (v6 核心) ═══════════════════════════════
-Pricing Strategy Engine 按 (profile.type × profile.list × 量级) 选策略：
+  1. 检查让步预算
+     remaining = max_concession - total_spent
+     若 remaining ≤ 0 → 不让步，转价值替代或转人工
 
-  客户=量型 + 普通 + 询价50t:
-    主策略 = volume_driven_lowest
-    输出 QuoteOption[]:
-      [1] 推荐方案：50t 拆 30 武汉 + 20 襄阳
-          均价 ¥3,792  含倒短运费 ¥30/t  总价 ¥189,600
-          锁价 24h
-      [2] 标准方案：50t 武汉江夏倍尺
-          单价 ¥3,790  锁价 24h
-      [3] 优质方案：50t 武汉江夏标准品（库存 30+20）
-          均价 ¥3,820  锁价 24h
-          [建议销售跟进：客户偏低价时可不推荐]
+  2. 计算本轮建议让步幅度（递减原则）
+     round=1: 0.50 × remaining
+     round=2: 0.25 × remaining
+     round=3: 0.10 × remaining
+     round=4: 0.05 × remaining
+     round≥5: 不让步，转人工
 
-  若客户=利型 + 普通:
-    主策略 = profit_quality_first
-    输出：优先推 [3]，备选 [1]
+  3. 按客户类型调整
+     求利型: 单价让步占主，60%
+     求量型: 量绑定占主，价让步小
+     战略型: 价 + 时 + 期组合
+     新客:   保持首报价（除非 ≤2 元小让）
+     流失:   一次性给到位
 
-  若客户=新客 + 普通:
-    主策略 = new_customer_attractive
-    输出：推 [2]，并补"首单优惠 -¥10/t"，锁价 6h（短）
-          附话术：欢迎首单合作，本次为新客特批
+═══ 阶段 4：整单视角（Order-level Optimizer） ════════════
+若整单含多 item：
+  - 评估每 item 的 margin headroom
+  - 跨 item 重新分配让步
+  - 输出 1~2 个推荐分配方案
+  
+示例：客户砍螺纹 ¥30
+  方案 A：螺纹直让 ¥20（不直接给到客户要的 30）
+  方案 B：螺纹保价 + 中板让 ¥40（中板毛利厚） → 整单让 ¥800 ≈ 螺纹 ¥16
 
-  若客户=黑名单（普通级别）:
-    主策略 = blacklist_uplift
-    输出：[3] 上浮 ¥80/t，注明"现款现货"，锁价 2h
+═══ 阶段 5：多维反报价生成 ════════════════════════════════
+Counter-offer Generator 搜索：
 
-═══ 阶段 F：行为干预 (v6 软影响) ═════════════════════════════
-Soft Influence 检测到 ghost_score 0.62（询多买少）:
-  - 锁价时长降为 6h（默认 24h）
-  - 不展示阶梯优惠（不让客户拿着低价四处比）
-  - 附"销售小张稍后联系您"，标记 sales_followup=true
-  - 不在回执文字里抱怨；仅通过差异化让客户"感知到"
+  对于"客户砍 ¥30"，生成多个等价反报价：
+    A. 让 ¥15/t（一半价让步）
+    B. 让 ¥10/t + 锁价延长 24h
+    C. 让 ¥10/t + 免运费（按当前距离 ≈ ¥20/t 等价）
+    D. 保价但加 20t 再让 ¥20（量绑定）
+    E. 保价 + 整单从其他 item 让步等价
+    F. 保价但赠送材质书 + 优先发车
 
-═══ 阶段 G：MOQ 校验 ═══════════════════════════════════════
-品类 MOQ 表查：螺纹钢 MOQ = 30t
-本次 50t ≥ 30t → 正常报价
-若 < 30t → 标 unweighed_only = true，价格按"不过磅 ¥/支"
+  按客户类型筛选 Top-2
 
-═══ 阶段 H：档位执行 ═════════════════════════════════════════
-档位 = Assisted:
-  - Bot 把 QuoteOption[] 发给销售小张（企微 textcard）
-    «客户张总询价 INQ-001
-     画像：量型 普通 信用正常 ghost=0.62 ⚠️白嫖偏高
-     系统建议：方案 1 ¥3,792 均价（拆单），锁价 6h
-     [一键确认] [调整价格] [改方案] [转人工]»
-  - 销售 10s 内点"一键确认" → Bot 回客户
-  - 或销售调整后确认 → Bot 回客户
+═══ 阶段 6：档位决策 + 销售确认 ═══════════════════════════
+档位 = Auto：
+  - 客户砍价 → 自动升档到 Assisted（不让 Bot 自己议价）
+  - 议价始终需要销售点头
 
-档位 = Auto:
-  - 跳过销售，Bot 直接回客户
-  - 异步抄送销售（"已为白名单客户 XX 自动报价 ¥xxx"）
+档位 = Assisted：
+  - Bot 推荐方案给销售（textcard + 一键确认）
+    «客户张总（求利型/普通）议价（第 2 轮）
+     原报价 ¥3,820
+     客户出价 ¥3,780（砍 ¥40）
+     ──────
+     方案 A（推荐）：让 ¥15 → ¥3,805，附 24h 锁价
+     方案 B：让 ¥10 + 免运 ≈ 让 ¥30
+     方案 C：保价但加 20t 再让 ¥20
+     ──────
+     让步预算：剩 ¥45/t
+     竞品：X 家 ¥3,780（系统标注：该客户半年内 3 次提同样 X 家但未走 X 家）
+     [发方案 A] [发方案 B] [发方案 C] [自定义] [转人工]»
+  - 销售 30 秒内选 → Bot 发话术给客户
+  - 销售可"自定义" → 弹简易表单填新方案
 
-档位 = Manual:
-  - Bot 不出价，仅创建工单 + 摘要给销售
-  - 销售全自助回价
+档位 = Manual：
+  - Bot 不出方案，只把议价上下文 + 历史给销售
+  - 销售自己回
 
-═══ 阶段 I：客户收到报价 ════════════════════════════════════
-（话术按客户画像差异化，见 6.4）
+═══ 阶段 7：客户回复 → 进入下一轮 OR 收口 ════════════════
+客户回："3795 我就下"
+  → 解析为 round=3 的 CustomerOffer
+  → 回到阶段 2，循环
 
-═══ 阶段 J：转化追踪 ═══════════════════════════════════════
-报价后 24h / 7d / 30d 未成交 → 触发不同策略：
-  - 12h 未回应：销售自动收到"客户未回复"提醒
-  - 锁价过期：Bot 主动询问"价格已到期，是否需要重新报价"（限频）
-  - 持续 N 次报价未成交 → ghost_score↑，下次报价更短锁价 + 销售关怀
+客户回："好"
+  → 状态 AGREED
+  → 询问"是否锁价并安排下单"，进入下单流程
+
+客户长时间不回 / "再考虑"：
+  → IMPASSE 状态，记录但保留议价 session 24h
+  → Soft Influence: 锁价过期前提醒一次
+
+═══ 阶段 8：退出议价 ═══════════════════════════════════════
+退出条件：
+  - AGREED 客户接受 → 进入下单/锁价
+  - 触达成本红线 → 转销售人工
+  - 议价轮次 ≥ 5 → 转人工
+  - 客户多次提虚假竞品 → 转人工
+  - 客户暴怒/施压（LLM 情绪检测） → 转人工 + 提示销售
+  - 销售主动接管
+
+═══ 全程审计 ══════════════════════════════════════════════
+所有 offer 双向落 negotiation_log：
+  - 每轮 customer_offer / system_response / chosen_strategy / sales_action
+  - 让步预算使用情况
+  - 最终结果（AGREED/IMPASSE/ESCALATED）
+用途：纠纷追溯 + 策略复盘 + 销售培训
 ```
 
-### 4.3 重复询价压制（v6 新增）
+### 4.9 整单议价（多 item 同时谈）
 
 ```
-客户在 24h 内询同样规格的螺纹 HRB400 25mm 沙钢 50t：
-  - Bot 不重新走策略
-  - 直接引用上次 QuoteOption
-  - 话术："此规格 24h 内已为您报价 ¥3,792（剩余有效 4h）
-           如需续期请回复『续期』；如需新方案请回复『重新报价』"
-  - 销售可手动豁免（如行情大跳）
+客户："这三个品种加起来给个底价"
+   ↓
+Order-level Profit Optimizer：
+  - 计算整单当前总价、总毛利、各项 headroom
+  - 按客户类型选分配模式：
+      求利型: 主项小让 + 配项多让
+      求量型: 量阶梯整体激活
+      战略型: 整单一口价
+  - 输出整单方案 1~2 个
+   ↓
+Bot/销售发整单方案，客户对整单回价
+   ↓
+若客户仍逐项砍 → 进入 4.8 单 item 议价循环
+若客户接受整单 → 整单 AGREED → 一次下单
 ```
-
-### 其他流程（4.1 同步查询 / 4.4~4.7）同 v5
-略。
 
 ---
 
-## 5. 模块设计
+## 5. 模块设计（v7 增量）
 
-### 5.1~5.16 同 v5
+### 5.1~5.23 同 v6
 略。
 
-### 5.17 Customer Profile Engine（v6 新增核心）
+### 5.24 Negotiation Session Manager（v7 新增）
 
-**5.17.1 属性体系**
-
-```yaml
-CustomerProfile:
-  identity:
-    customer_id, name, contact, region, salesperson_id
-  type:                    # 客户类型（自动 + 销售可覆盖）
-    primary: new | volume | profit | strategic | churn
-    confidence: 0.0~1.0
-    last_classified_at: timestamp
-    override: { by: sales_xxx, type: profit, reason: "..." }
-  list:                    # 名单
-    status: whitelist | normal | blacklist
-    blacklist_level: null | uplift | cash_only | prepay | refuse
-    expires_at: timestamp  # 黑名单可设有效期
-  credit:
-    status: normal | warning | frozen
-    limit: 5000000
-    used: 1234567
-  behavior:
-    inquiry_30d, inquiry_90d
-    quote_30d, quote_90d
-    deal_30d, deal_90d
-    conversion_rate_30d, conversion_rate_90d
-    avg_ton_per_order
-    dso_days
-    profit_margin_hist
-    categories_dominant: [螺纹钢, 中厚板]
-    ghost_score: 0.0~1.0   # 见 5.20
-    last_deal_at
-    seasonal_pattern: ...  # 选填
-```
-
-**5.17.2 自动分类规则（默认 + 可配）**
+**5.24.1 状态机**
 
 ```
-new      ← 首次合作 < 90 天 AND 累计成交单数 < 3
-volume   ← 平均订单吨位 > P75 OR 月度采购量稳定且高
-profit   ← 历史毛利率 > P60 AND 平均订单吨位 < P75
-strategic← 销售或管理员手动标
-churn    ← 90 天无成交 AND 历史有成交
+                         ┌───────────────┐
+                         │   OPENING     │  Bot 已发首报价，等客户响应
+                         └───────┬───────┘
+                                 │ 客户接受
+                                 ▼
+                         ┌───────────────┐
+                         │   AGREED      │  进入下单流程
+                         └───────────────┘
+                                 ▲
+                                 │ 客户接受
+   ┌───────────────┐ 客户出价     │
+   │  COUNTERED    │──────────────┤
+   │  客户已反报价  │              │
+   └───────┬───────┘              │
+           │ 我方回让步             │
+           ▼                       │
+   ┌───────────────┐              │
+   │   CONCEDED    │──────────────┤  客户接受
+   │  我方已让步    │
+   └───────┬───────┘
+           │  客户继续砍 / 超阈值
+           ▼
+   ┌───────────────┐     ┌───────────────┐
+   │   IMPASSE     │     │  ESCALATED    │
+   │   僵持        │     │  转人工        │
+   └───────────────┘     └───────────────┘
 ```
 
-**5.17.3 更新频率**
-
-- 实时事件驱动：下单/付款/逾期/询价 → 更新对应指标
-- 每小时跑一次轻量重分类
-- 每天跑一次全量重算
-- 销售在 Bot/CRM 里可手动改 type 或 list（带原因记录）
-
-**5.17.4 数据来源**
-
-- ERP / CRM（订单、应收、回款、客户档案）
-- Bot 自身（询价、转化、对话）
-- 销售手动标注
-
-### 5.18 Pricing Strategy Engine（v6 新增核心）
-
-**5.18.1 设计原则**
-
-- **规则可配置**：策略 = YAML/JSON 配置 + 价格基线（不硬编码）
-- **可解释**：每条 QuoteOption 必须能追溯到（基价 → 应用了哪些规则 → 最终价）
-- **多策略同时输出**：默认输出主策略 + 1~2 备选
-- **风险红线**：低于成本价的报价必须拦截 + 转销售（Bot 永不报赔本价）
-
-**5.18.2 策略库（节选）**
-
-```yaml
-strategies:
-
-  - name: new_customer_attractive
-    when:
-      profile.type: new
-      profile.list: [whitelist, normal]
-    actions:
-      - select_inventory: lowest_attribute_match
-      - discount: { fixed: -10, unit: "元/吨" }    # 首单优惠
-      - lock_minutes: 360                          # 短锁价 6h（避免被薅）
-      - reply_template: new_customer_welcome
-      - tag: "首单优惠"
-
-  - name: volume_driven_lowest
-    when:
-      profile.type: volume
-      profile.list: [whitelist, normal]
-    actions:
-      - select_inventory: best_blended_price       # 拼仓最低
-      - ladder:                                    # 量阶梯
-          - qty_gte: 100, discount: -20
-          - qty_gte: 200, discount: -35
-      - lock_minutes: 1440                         # 24h
-      - reply_template: volume_focus
-
-  - name: profit_quality_first
-    when:
-      profile.type: profit
-      profile.list: [whitelist, normal]
-    actions:
-      - select_inventory: best_quality
-      - markup_quality_premium: 10
-      - lock_minutes: 1440
-      - reply_template: quality_focus
-
-  - name: strategic_anchor
-    when: { profile.type: strategic }
-    actions:
-      - use_strategic_price_table: true
-      - lock_minutes: 4320                         # 72h
-      - reply_template: strategic_partner
-
-  - name: churn_callback
-    when:
-      profile.type: churn
-    actions:
-      - discount: { fixed: -30 }                   # 唤回价
-      - lock_minutes: 720                          # 12h
-      - reply_template: churn_callback
-      - trigger_sales_followup: true
-
-  - name: whitelist_discount
-    when: { profile.list: whitelist }
-    actions:
-      - discount: { fixed: -15 }                   # 白名单基础下浮
-      - lock_extend: 1.5                           # 锁价延长 50%
-
-  - name: blacklist_uplift
-    when: { profile.list: blacklist, profile.blacklist_level: uplift }
-    actions:
-      - markup: { rate: 0.03 }                     # 上浮 3%
-      - require: cash_only
-
-  - name: blacklist_cash_only
-    when: { profile.blacklist_level: cash_only }
-    actions:
-      - markup: { rate: 0.05 }
-      - reply_template: blacklist_cash_only
-
-  - name: blacklist_refuse
-    when: { profile.blacklist_level: refuse }
-    actions:
-      - block_quote: true
-      - reply_template: blacklist_refuse_polite
-      - escalate_to_human: true
-
-  - name: moq_unweighed
-    when: { qty_under_moq: true }
-    actions:
-      - pricing_mode: per_piece
-      - markup: { rate: 0.04 }                     # 不过磅成本高
-      - reply_template: moq_unweighed
-      - tag: "不过磅销售"
-
-  - name: no_qty_indicative
-    when: { qty_missing: true }
-    actions:
-      - quote_type: indicative
-      - lock_minutes: 60                           # 极短
-      - reply_template: indicative_only
-      - tag: "指导价"
-
-  - name: explorer_throttle
-    when: { profile.behavior.ghost_score_gte: 0.5 }
-    actions:
-      - lock_minutes_override: 360                 # 不给长锁价
-      - hide_ladder: true                          # 不暴露阶梯
-      - trigger_sales_followup: true
-      - reply_template: explorer_soft_hint
-
-  - name: repeat_inquiry_quote_reuse
-    when: { same_spec_in_24h: true }
-    actions:
-      - reuse_last_quote: true
-      - reply_template: repeat_inquiry_reuse
-```
-
-**5.18.3 策略合成**
-
-多条策略可叠加，但有优先级 + 互斥：
-- `blacklist_*` 一律最高优先级，且禁止与 `whitelist_*` 共存
-- `explorer_throttle` 可与其他策略叠加（覆盖锁价时长）
-- 类型策略（`new/volume/profit/...`）互斥，选最匹配一条
-- 量级策略（`moq_*` / `no_qty_*`）单独应用
-
-**5.18.4 成本红线**
-
-每个 QuoteOption 都要校验：`final_price >= cost_price * (1 + min_margin)`。
-不满足 → 不输出该方案 + 自动转销售人工。
-min_margin 在配置里按品类区分。
-
-### 5.19 Inventory Matcher（v6 新增）
-
-**5.19.1 多源库存**
-查询输入：(category, grade, spec, qty_demand, dest_city?)
-查询输出：候选库存数组（仓库、批次、库存量、属性、基价、距离/运费）
-
-**5.19.2 组合算法**
-
-| 模式 | 适用 |
-|---|---|
-| **单源最便宜** | 量小 / 客户偏低价 |
-| **多源拼单** | 量大 / 单仓不足 / 拼后更便宜 |
-| **品质优先** | profit 客户 |
-| **就近优先** | 客户偏交付速度 |
-
-输出多个 QuoteOption 时按"客户类型推荐顺序"排列：
-- volume → 最低价在前
-- profit → 优质品在前
-- new → 中等价位 + 标准品在前
-
-**5.19.3 含运费总成本**
-
-报价默认含到达指定目的地的运费（基于仓库距离表）。差异化展示：
-- "到武汉江夏含运 ¥3,820"
-- "或自提武汉江夏 ¥3,790（省 ¥30 运费）"
-
-### 5.20 Conversion Behavior Tracker（v6 新增）
-
-**5.20.1 漏斗指标**
-
-```
-INQUIRY → QUOTED → LOCKED → ORDERED → SHIPPED → PAID
-   |         |        |         |          |        |
-   v         v        v         v          v        v
-inquiry_cnt  quote_cnt lock_cnt deal_cnt   ship_cnt pay_cnt
-```
-
-按 7d / 30d / 90d 滚动统计。
-
-**5.20.2 关键派生指标**
-
-| 指标 | 公式 | 用途 |
-|---|---|---|
-| 询价转化率 | deal / inquiry | 客户健康度 |
-| 报价转化率 | deal / quote | 报价吸引力 |
-| 锁价转化率 | deal / lock | 锁完不下的占比 |
-| **Ghost Score** | 综合得分（见 5.20.3） | 白嫖判定 |
-| 平均决策时长 | deal_at - inquiry_at 均值 | 客户犹豫度 |
-| 询价波动度 | 月度询价次数的方差 | 客户稳定性 |
-
-**5.20.3 Ghost Score 计算**
-
-```
-ghost_score =
-  0.4 * (1 - conversion_rate_30d) +
-  0.2 * (重复询同规格不成交次数 / 总询价) +
-  0.2 * (锁价后未下单率) +
-  0.1 * (横向比价显著标识：如询价后 1h 内又问"对方报多少") +
-  0.1 * (与同类客户的平均水平相比)
-归一化到 0~1
-```
-
-阈值：
-- < 0.3：正常
-- 0.3~0.5：有点活跃比价
-- 0.5~0.7：偏白嫖（启动软干预）
-- ≥ 0.7：典型白嫖（销售强介入）
-
-**5.20.4 实时事件**
-每次状态变化（quoted/locked/expired/ordered/cancelled）打点 → Kafka/Redis Stream → 实时更新指标 + 触发对应策略。
-
-### 5.21 Soft Influence Module（v6 新增：行为干预 / 关系维护）
-
-> 这是处理"白嫖客户"的关键模块。**核心理念**：不抱怨、不指责、靠**差异化体验**让客户自己悟。
-
-**5.21.1 5 层渐进策略**
-
-| 层 | 触发 | 动作 | 客户体感 |
-|---|---|---|---|
-| **L1 隐性配额** | 24h 内同规格重复询价 | 引用上次报价 + 温和提示 | "原来一样的我刚问过" |
-| **L2 锁价缩短** | ghost_score ≥ 0.5 | 锁价从 24h → 6h | "怎么这次给的时间这么短" |
-| **L3 阶梯隐藏** | ghost_score ≥ 0.5 | 不展示量阶梯优惠 | "怎么没看到批量价" |
-| **L4 销售关怀** | ghost_score ≥ 0.6 OR 报价 5 次未成交 | 销售主动联系，话术：「最近为您报了几次，有什么顾虑可以聊聊」 | "原来销售这么关心我" + 微妙压力 |
-| **L5 策略降档** | ghost_score ≥ 0.7 | 从"利型/量型策略"降为标准价；不再给唤回优惠 | "这次报价怎么没那么有竞争力了" |
-
-**5.21.2 配套话术（极简，绝不抱怨）**
-
-| 场景 | 话术（差异化版本） |
-|---|---|
-| L1 重复询价 | "📌 此规格 24h 内已为您报价 ¥3,792，剩余有效 4h。如需新方案请回复『重新报价』；如需调整请回复『改条件 XX』" |
-| L4 销售关怀（销售视角脚本） | "张总最近询了几次咱们家的螺纹，是不是有些方案上还想再对比？我看看哪里能帮您再调整下" |
-| L5 沉默降档 | （不主动告知，靠回执差异让客户感知；如客户问"价格怎么涨了"→销售解释市场波动） |
-
-**5.21.3 反向激励（让"勤下单客户"明显更爽）**
-
-| 客户 | 体感差异 |
-|---|---|
-| 高转化客户 | 报价更快、锁价更长、阶梯更优、销售优先排队、可见"VIP 标识" |
-| Ghost 客户 | 上述全部反向 |
-
-**关键**：把"白嫖代价"和"忠诚红利"做成**可对比的体验差**，而不是"惩罚"。客户感受到的不是被指责，而是"原来勤下单的客户被这样对待"。
-
-**5.21.4 客情防火墙**
-
-- L1~L3 全自动，话术不带任何指责字眼
-- L4 销售介入前，Bot 先告知销售客户画像 + 建议话术
-- L5 永远不向客户公开"ghost_score"或"你被降档了"
-- 销售可一键豁免任一层（带原因记录）
-- 客户连续 30 天活跃下单 → ghost_score 自动下降 + 恢复优待
-
-### 5.22 Tool Registry（v6 更新）
-
-| 工具 | 入参变化 |
-|---|---|
-| `parse_inquiry` | 同 v5 |
-| `submit_inquiry` | 同 v5 |
-| **`compose_quote`** *(v6 新增)* | inquiry_item, customer_id → 返回 QuoteOption[] + strategy_trace；仅在 Auto/Assisted 档位调用 |
-| **`confirm_quote`** *(v6 新增)* | option_id（销售确认 Assisted 报价；或客户回"确认"准备下单） |
-| `query_inquiry_status` | 同 v5 |
-| 其他工具 | 同 v5 |
-
-**QuoteOption v6 结构**：
+**5.24.2 数据结构**
 
 ```json
-{
-  "option_id": "OPT-...",
-  "inquiry_item_id": "...",
-  "label": "推荐方案 / 标准方案 / 优质方案",
-  "inventory_plan": [
-    {"warehouse":"武汉江夏", "qty":30, "base_price":3820, "attrs":"标准"},
-    {"warehouse":"襄阳",     "qty":20, "base_price":3750, "attrs":"长锈"}
+NegotiationSession {
+  session_id, topic_id, inquiry_id,
+  customer_id, sales_id,
+  state: OPENING/COUNTERED/CONCEDED/AGREED/IMPASSE/ESCALATED,
+  rounds: [
+    {
+      round_no: 1,
+      direction: "system_offer" | "customer_offer",
+      timestamp,
+      payload: { item_id, price, qty, terms, raw_msg },
+      strategy_applied: ["volume_driven_lowest"],
+      concession_amount: 0 | 15 | ...,
+      generated_options: [...],         // 当时给销售的方案
+      sales_chosen: "A",                // 销售选了哪个
+      llm_reply_template: "...",
+      delta_from_last_round: -15
+    },
+    ...
   ],
-  "freight_per_ton": 30,
-  "blended_unit_price": 3792,
-  "total_amount": 189600,
-  "lock_minutes": 360,
-  "lock_expires_at": "2026-05-28T22:00:00+08:00",
-  "strategy_trace": [
-    {"rule":"volume_driven_lowest", "effect":"select_inventory=best_blended_price"},
-    {"rule":"explorer_throttle",    "effect":"lock_minutes_override=360"}
+  budget: {
+    item_id, max_concession, total_spent, remaining
+  },
+  competitor_mentions: [
+    { round, name, price, tone, verified: bool }
   ],
-  "tags": ["拼仓","含运","软干预-锁价缩短"],
-  "notes_to_customer": "...",
-  "notes_to_sales":    "客户 ghost=0.62 偏高，建议人工跟进",
-  "moq_ok": true,
-  "above_cost_redline": true,
-  "tier": "Assisted"
+  emotion_track: ["neutral","strong","irritated"],
+  result: AGREED/IMPASSE/ESCALATED,
+  closed_at
 }
 ```
 
-### 5.23 Storage（v6 新增表）
+**5.24.3 会话生命周期**
+
+- 创建：Bot 发出首报价时创建（OPENING）
+- 推进：每次 customer 或 system 出价 → 追加 round
+- 关闭：AGREED（转下单）/ IMPASSE（保留 24h 复活）/ ESCALATED（销售接管）
+- 跨天恢复：跟 Topic 一致，跨天议价合法（行情未变时）
+
+### 5.25 Concession Strategy Engine（v7 新增）
+
+**5.25.1 让步预算**
+
+每个 QuoteOption 创建时由 Pricing Engine 分配：
+
+```
+budget = current_price - max(cost_price * (1 + min_margin), price_floor_per_category)
+budget_pace = 客户类型决定（求利型 0.5/0.25/0.1/0.05；求量型主要靠量；战略型一次性 0.7）
+```
+
+**5.25.2 让步曲线（按客户类型）**
+
+```yaml
+concession_curves:
+
+  profit_seeker:           # 求利型
+    description: 慢让、递减、末端价值替代
+    rounds:
+      - { round: 1, type: price, ratio: 0.50 }
+      - { round: 2, type: price, ratio: 0.25 }
+      - { round: 3, type: price, ratio: 0.10 }
+      - { round: 4, type: value_add, ratio: 0 }   # 转赠送/质量
+      - { round: 5, type: escalate }
+
+  volume_seeker:           # 求量型
+    description: 量价绑定为主，价让步小
+    rounds:
+      - { round: 1, type: qty_bundle, hint: "加 20t 再让 ¥20" }
+      - { round: 2, type: price, ratio: 0.20 }
+      - { round: 3, type: qty_bundle + price, ratio: 0.20 }
+      - { round: 4, type: escalate }
+
+  strategic:               # 战略型
+    description: 一次给到，换长期承诺
+    rounds:
+      - { round: 1, type: price, ratio: 0.70 }
+      - { round: 2, type: time + term }            # 锁价 + 账期
+      - { round: 3, type: escalate }
+
+  new_customer:            # 新客
+    description: 首报价已含优惠，不缠斗
+    rounds:
+      - { round: 1, type: gift }                   # 赠送材质书/优先发
+      - { round: 2, type: escalate }
+
+  churn:                   # 流失客户
+    description: 一次给到底
+    rounds:
+      - { round: 1, type: price, ratio: 0.80, hint: "唤回价已包含" }
+      - { round: 2, type: escalate }
+```
+
+**5.25.3 关键原则**
+
+- **让步递减**：每轮让步幅度递减，避免被无限砍
+- **末端价值替代**：让到一半后转价值替代（赠/时/质）
+- **不破红线**：成本 + 最低毛利 = 硬底线，永不破
+- **不轻易显示底牌**：剩余预算只给销售看，不告诉客户
+
+### 5.26 Order-level Profit Optimizer（v7 新增）
+
+**5.26.1 整单视图**
+
+```json
+OrderProfitView {
+  order_draft_id,
+  items: [
+    { item_id, qty, price, cost, margin_per_t, headroom },
+    ...
+  ],
+  total_revenue, total_cost, total_margin, blended_margin_rate,
+  bottleneck_item_id: "毛利最薄的 item",
+  fattest_item_id:    "毛利最厚的 item"
+}
+```
+
+**5.26.2 跨项让步分配算法**
+
+输入：客户砍价 X 元在 item-K 上
+输出：1~2 个分配方案
+
+```
+方案 A "单点让"：
+  item-K 让 X1 (X1 = 让步预算允许的最大，但 ≤ X)
+  其他 item 保价
+  适合：求利型，客户视觉聚焦
+
+方案 B "转嫁让"：
+  item-K 保价（headroom 已薄）
+  fattest_item 让 Y，让 item-K 客户得到的整单优惠 ≈ X*qty
+  适合：item-K 毛利已薄；客户接受"整单看"
+
+方案 C "分散让"：
+  每个 item 都让 1~5 块
+  整单累计 ≈ X*qty
+  适合：求量型（也表现"都让了"）
+
+方案 D "整单一口价"：
+  直接给整单总价 -¥Y
+  Y = X*qty - 一点
+  适合：战略客户
+```
+
+**5.26.3 整单底线**
+
+整单加权毛利率 < min_blended_margin → 拒绝继续让步 → 转销售。
+
+### 5.27 Counter-offer Generator（v7 新增）
+
+**5.27.1 8 维让步货币定义**
+
+```yaml
+concession_currencies:
+
+  price:
+    cost_per_unit: 1.0         # 等价系数
+    customer_sensitivity: 1.0
+    unit: 元/吨
+    constraint: 不破成本红线
+
+  qty:
+    cost_per_unit: -0.3        # 加量边际增本低
+    customer_sensitivity: 0.8
+    unit: 吨
+    constraint: 库存允许 + 客户能接
+
+  time:
+    cost_per_unit: 0.05/小时   # 行情风险折算
+    customer_sensitivity: 0.4
+    unit: 小时
+
+  freight:
+    cost_per_unit: 1.0         # 按实际运费等价
+    customer_sensitivity: 0.6
+    unit: 元/吨
+    constraint: 配送范围内
+
+  term:                        # 账期
+    cost_per_unit: 0.03/天     # 资金成本
+    customer_sensitivity: 0.5
+    unit: 天
+    constraint: 信用额度允许
+
+  quality_upgrade:
+    cost_per_unit: 10~50       # 升级到优级品
+    customer_sensitivity: 0.3
+    unit: 元/吨
+    constraint: 库存有
+
+  gift:                        # 赠送（材质书/优先发车/优先供应）
+    cost_per_unit: ~0
+    customer_sensitivity: 0.2
+    constraint: 不滥用
+
+  bundle:                      # 整单打包
+    cost_per_unit: 看具体方案
+    customer_sensitivity: 0.7
+    unit: 元/单
+```
+
+**5.27.2 等价组合搜索**
+
+```
+目标：客户砍 ¥30/t × 50t = ¥1,500 让步
+
+枚举 1~3 维组合（避免方案太复杂客户算不过来）：
+  - {price: -15} → 等价 ¥750（够吗？看客户类型）
+  - {price: -10, time: +24h} → 实际让 ¥10*50 + 时间风险
+  - {price: -10, freight: -20} → 实际 ¥1,500
+  - {qty: +20, price_on_total: -20} → 量价绑定
+  - {bundle: -1500} → 整单一口让
+
+按客户类型 + sensitivity 排序，取 Top-2~3 给销售
+```
+
+**5.27.3 输出格式**
+
+每个 counter-offer 含：
+- 摘要："让 ¥10/t + 免运费 ≈ 等价让 ¥30/t"
+- 详细成本（销售看的，客户看不到）
+- 客户视角话术草稿
+- 估计的客户接受概率（基于历史）
+
+### 5.28 Bargaining LLM Layer（v7 新增）
+
+**5.28.1 Prompt 上下文**
+
+```
+System: 你是钢铁贸易资深销售助手，正在帮销售小张回复客户议价。
+       客户：张总，求利型，普通，半年合作 5 次。
+       本次议价：第 2 轮。
+       已让步：¥15/t。剩余预算：¥30/t（不告诉客户）。
+       本次销售选定方案：让 ¥10/t + 锁价延长 24h。
+
+要求：
+  - 礼貌、不卑不亢
+  - 不要直接说"还有让步空间"或"老板还能批"（暴露底牌）
+  - 把价值替代（锁价延长）说出价值
+  - 留下"如果加量还能进一步谈"的钩子（求利型 + 量绑定预热）
+  - 不超过 120 字
+  - 不出现"白嫖"等不当词
+
+Few-shot: 3 个真实议价话术正面/反面例子
+
+User: 客户最新原话："3780 我才下"
+```
+
+**5.28.2 输出示例（典型话术）**
+
+```
+"张总，听您的，沙钢 HRB400 25mm 这批我帮您再让 10 块，到 ¥3,805/吨，
+锁价延长到 48 小时给您慢慢决定。这批长沙钢厂直发，发货也优先。
+如果方便加到 80 吨，我再帮您和老板沟通一下。"
+```
+
+**5.28.3 安全约束**
+
+- LLM **绝不输出** 价格、库存、订单号等关键数字（这些从 Counter-offer 结构里直接渲染，LLM 只填话术包装）
+- LLM 绝不"许愿"（不能说"我跟老板申请下"暗示有让步空间）除非销售明确批
+- 后置 DLP 扫敏感词（如"成本"、"底价"、"老板"、"亏本"）
+
+**5.28.4 客户情绪检测**
+
+LLM 顺带做情绪标注（neutral/strong/irritated/threatening）：
+- irritated/threatening → 立即转销售
+- strong → 提示销售关注
+- neutral → 继续 Bot/Assisted
+
+### 5.29 Tool Registry（v7 增量）
+
+| 工具 | 入参 | 说明 |
+|---|---|---|
+| `negotiate_round` | session_id, customer_offer | 推进一轮议价，返回推荐 counter-offers |
+| `accept_offer` | option_id | 客户/销售接受 |
+| `escalate_negotiation` | session_id, reason | 转人工 |
+| `propose_order_bundle` | inquiry_id, customer_id | 整单方案生成 |
+| `get_negotiation_history` | session_id | 查议价历史 |
+
+### 5.30 Storage（v7 新增表）
 
 | 表 | 用途 |
 |---|---|
-| `customer_profile` | 画像主表 |
-| `customer_profile_history` | 画像变更历史（含手动覆盖） |
-| `customer_blacklist` / `whitelist` | 名单 + 等级 + 失效时间 |
-| `pricing_strategy_config` | 策略规则（YAML/JSON） |
-| `pricing_strategy_version` | 策略版本与变更审计 |
-| `quote_option` | 生成过的报价方案 |
-| `strategy_trace` | 每次报价应用了哪些规则 + 数据 |
-| `inventory_snapshot` | 报价时点库存快照（争议追溯） |
-| `conversion_event` | 漏斗事件流 |
-| `ghost_score_history` | ghost 分数变化 |
-| `soft_influence_log` | 触发了哪层干预、客户后续行为 |
+| `negotiation_session` | 议价会话主表 |
+| `negotiation_round` | 每轮 offer 详情 |
+| `negotiation_budget` | 让步预算与消耗 |
+| `concession_curve_config` | 让步曲线配置（YAML） |
+| `competitor_mention` | 客户提的竞品（用于判断真假） |
+| `bargaining_prompt_log` | 议价 LLM 调用日志 |
+| `order_profit_view_snapshot` | 整单视图快照（议价时点） |
 
 ---
 
-## 6. 钢铁贸易话术与体验（v6 强化）
+## 6. 钢铁贸易话术与体验（v7 增量）
 
-### 6.1~6.3 同 v5
-略。
+### 6.5 议价话术模板
 
-### 6.4 客户分层话术模板（v6 新增）
-
-#### 新客（首次询价）
+#### 求利型 - 第 1 轮
 ```
-🎉 欢迎首次询价！本次为您提供新客特批：
-HRB400 螺纹钢 Φ25mm × 50t（沙钢，武汉到货）
-¥3,810/吨（含税含运，首单 -10）
-有效期 6 小时
-如需下单或调整方案，回复『继续』或联系销售小张：13xxxx
+张总好，您说的价格我跟仓库核了下，咱们这批沙钢 HRB400 25mm 的拿货成本就在那儿。
+我尽力帮您争取，让 ¥15/t 到 ¥3,805，锁价也帮您从 24h 拉到 48h，您慢慢看。
+现在这价位上下游都在挺，长不了。
 ```
 
-#### 量型客户
+#### 求利型 - 第 2 轮（递减让步）
 ```
-📊 您的询价方案：
-HRB400 螺纹钢 Φ25mm × 50t（武汉到货）
-推荐方案（拼仓）：均价 ¥3,792/吨  总价 ¥189,600
-量阶梯：≥100t 再优 ¥20/t；≥200t 再优 ¥35/t
-有效 24 小时
-回复『下单』或『调整数量』
+张总，前面已经帮您让到 ¥3,805 了。这次再让 ¥5 到 ¥3,800，
+另外材质书我帮您准备好，到货当天就给您；发车也排前面，48 小时到武汉。
+您看这样行不行？
 ```
 
-#### 利型客户
+#### 求利型 - 第 3 轮（价值替代）
 ```
-✨ 为您匹配的优质方案：
-HRB400 螺纹钢 Φ25mm × 50t（武汉江夏 优级标准品）
-单价 ¥3,820/吨（含税含运）
-材质书 + 一炉一证 + 优质短锈
-有效 24 小时
+张总，价上确实没再多空间了。这样，我看您是要送到江夏对吧，运费这块儿
+我帮您兜下来（约 ¥20/t），相当于您实际拿到 ¥3,780 的价位。
+咱们价直接到这了，下午能锁吗？
 ```
 
-#### 战略客户
+#### 求量型 - 量价绑定
 ```
-🤝 战略合作专属价：
-HRB400 螺纹钢 Φ25mm × 50t
-¥3,775/吨（战略价表）
-锁价 72 小时
-如需备货请提前 24h 告知
+张总，单价上让多了仓库这边就紧了。换个思路：
+您把这批从 50t 加到 70t，单价我帮您压到 ¥3,795，多出来这 20t 也按同价，
+等于均价直接到位。库里正好有，您看？
 ```
 
-#### 流失客户（唤回）
+#### 战略型 - 一次到位
 ```
-👋 好久不见，本次专为您匹配：
-HRB400 螺纹钢 Φ25mm × 50t
-¥3,762/吨（唤回价 -30）
-12 小时内有效
-销售小张稍后会联系您，看看是哪里没合作好
+李总，您是咱们老合作伙伴，这次不绕弯子，直接给到 ¥3,775，
+锁价 72 小时；如果您能签个本月 500t 的量保，我再帮您锁个全月。
 ```
 
-#### 黑名单（uplift）
+#### 新客 - 不缠斗
 ```
-您的询价方案：
-HRB400 螺纹钢 Φ25mm × 50t
-¥3,935/吨（现款现货）
-2 小时有效
-说明：因账期原因暂按现款，恢复正常后回到标准价
+王总，您首单的价 ¥3,810 已经是给您新客户专批的，
+材质书优先开、首车优先发，这些我都给您安排上。
+价上恕我帮不上更多了，您看方便先来 30t 试试合作吗？
 ```
 
-#### MOQ 不足（不过磅）
+#### 流失客户 - 唤回
 ```
-您的询价方案：
-HRB400 螺纹钢 Φ25mm × 20 支（不足过磅起订量 30t）
-¥920/支（按支销售，不过磅）
-有效 24 小时
-如凑齐 30t 起按吨过磅价 ¥3,820/吨
+赵总，好久没听到您声音了！这次给您直接到唤回价 ¥3,762，
+锁 12 小时，您看下今天能定吗？回头我跟小张专门盯下您这单。
 ```
 
-#### 纯询价（无量）
+#### 黑名单 cash_only 客户施压
 ```
-当前指导价（仅供参考）：
-HRB400 螺纹钢 Φ25mm（沙钢，武汉到货）
-约 ¥3,820/吨
-实际成交以您提供数量、目的地及提货时为准
-有效 1 小时
+张总，咱们这边规则您也清楚，这单需要现款，我能给的就是 ¥3,935 这条线。
+您方便资金到位的话，我马上锁价给您发。
 ```
 
-#### 重复询价（L1）
+#### 客户提竞品（系统记录："X家半年内 3 次同样话术未走 X 家"）
 ```
-📌 此规格 24h 内已为您报价 ¥3,792/吨（剩余有效 4h）
-如需新方案：回复『重新报价』
-如需续期：回复『续期』（由销售审批）
-如需调整：回复『改条件 XX』
+张总，X 家 ¥3,780 这个我了解。咱们家这批是沙钢直发，
+材质书一炉一证、24h 内发车、48h 内到武汉江夏。
+真要按 ¥3,780 走，我得跟老板汇报一下，您容我半小时回您可以吗？
 ```
+> 备注：这种话术给销售一个"缓冲窗"，让客户冷却 + 销售判断是否真给批价。
 
-#### 软干预（L4 销售脚本，仅销售可见）
+#### 转人工
 ```
-[系统建议销售话术]
-客户：张总（量型/普通/ghost=0.62）
-建议联系：今日 15:00 后
-切入：「张总最近询了几次咱家螺纹，是不是有方案上想再对比一下？
-       我看看是规格还是产地能再帮您调一调」
-不要说：「您一直询价没下单」「白嫖」
+张总，您这个方案咱们得让销售小张当面跟您细聊一下。
+他十分钟内联系您，您先等下。
 ```
 
 ---
 
-## 7. 安全与合规（v6 增量）
+## 7. 安全与合规（v7 增量）
 
-- **价格策略配置变更**全量审计 + 二人复核（避免改错策略导致赔本）。
-- **客户画像、ghost_score、soft_influence_log** 严禁泄漏给客户；销售看到的内容也要按角色权限可见。
-- 策略 trace 留存 1 年，纠纷追溯用。
-- 黑/白名单变更必须有原因 + 操作人 + 审批。
+- 议价话术 LLM 输出必经 DLP（禁词：成本/老板/亏本/底价/批价等暴露内部的字眼）。
+- 让步预算永远不在客户回复里露面。
+- 销售 override 议价决策（如手动放穿底价）→ 强制留原因 + 主管审批 + 审计。
+- 议价日志保留 1 年，纠纷追溯。
 
 ---
 
-## 8. 可观测性（v6 增量）
+## 8. 可观测性（v7 增量）
 
-- 报价指标：
-  - `quote_total{tier}` (Auto/Assisted/Manual)
-  - `quote_strategy_applied{rule}`
-  - `quote_to_deal_rate{customer_type}`
-  - `quote_below_cost_blocked_total`（成本红线拦截）
-- 干预指标：
-  - `soft_influence_trigger{level}`
-  - `ghost_score_distribution`
-  - `repeat_inquiry_suppressed_total`
+- 议价指标：
+  - `negotiation_rounds_distribution`
+  - `negotiation_outcome{result}`（AGREED/IMPASSE/ESCALATED）
+  - `concession_total_amount{customer_type}`
+  - `counter_offer_acceptance_rate{type}`
+  - `bargaining_llm_safety_blocked_total`（DLP 拦截）
 - 销售视角：
-  - 一键确认率、平均确认时长、销售调整幅度
+  - 销售选 Top-3 方案接受率（评估 Bot 建议质量）
+  - 销售 override 频率
+  - 议价成单率
+- 客户视角：
+  - 议价后转化率
+  - 议价拉长导致超时未成交率
+  - 客户情绪分布
 
 ---
 
-## 9. 部署 / 10. 里程碑（增量）
-
-里程碑新增（追加到 v5）：
+## 9. 部署 / 10. 里程碑（v7 增量）
 
 | 里程碑 | 交付物 |
 |---|---|
-| **M21 Customer Profile Engine** | 客户画像表 + 自动分类规则 + 销售手动覆盖 UI |
-| **M22 Conversion Tracker** | 漏斗事件流 + 关键指标 + Ghost Score |
-| **M23 Inventory Matcher** | 多源查询 + 组合优化 + MOQ 校验 + 运费 |
-| **M24 Pricing Strategy Engine** | 策略库 + 配置后台 + 成本红线 + 策略 trace |
-| **M25 三档协作 + Bot UI** | Auto/Assisted/Manual 判定 + 销售一键确认卡片 |
-| **M26 Soft Influence** | 5 层渐进式干预 + 差异化话术 + 反向激励 + 客情防火墙 |
-| **M27 报价话术模板** | 按客户分层的回执模板 + 销售脚本 |
-| **M28 策略灰度上线** | 先 Auto 仅小金额 + 白名单；逐步开 Assisted；全量 |
+| **M29 Negotiation Session Manager** | 议价状态机 + 会话存储 + 跨天恢复 |
+| **M30 Concession + Counter-offer** | 让步预算 + 让步曲线 + 8 维让步生成 |
+| **M31 Order-level Profit Optimizer** | 整单视图 + 跨项让步分配 + 整单底线 |
+| **M32 Bargaining LLM** | 议价 Prompt + few-shot + 情绪检测 + DLP |
+| **M33 议价话术模板** | 8 套话术模板 + 销售脚本 |
+| **M34 议价灰度** | 先 Assisted（强销售确认）→ 部分 Auto 升级议价 → 整单议价 |
 
 ---
 
-## 11. 风险与对策（v6 增量）
+## 11. 风险与对策（v7 增量）
 
 | 风险 | 影响 | 对策 |
 |---|---|---|
-| Auto 报价赔本 | 资损 | 成本红线必过 + 单笔金额上限 + 异常报价拦截器 |
-| 策略配置改错 | 大面积错价 | 二人复核 + 灰度发布 + 自动回滚 |
-| Ghost 误伤好客户 | 客情受损 | 评分阈值保守 + 销售可豁免 + 客户重新活跃后自动恢复 |
-| 客户察觉"被降档" | 客情危机 | 永远不公开评分；差异通过"市场行情"等中性话术解释 |
-| 黑名单滥用 | 销售个人偏好导致客户冤枉 | 黑名单分级 + 强制理由 + 上级审批 + 30 天复盘 |
-| 客户偏好与系统画像冲突 | 销售觉得系统不准 | 销售可手动覆盖；学习销售覆盖原因优化模型 |
-| 库存数据不实时 | 报价后无货 | 报价附库存快照 + 短锁价 + 自动补货机制 |
-| 同一客户多销售争抢 | 内部冲突 | 客户绑定销售 + 报价归属销售 + 销售调整审计 |
-| 重复询价压制过度 | 客户不耐烦 | 提供"重新报价"出口 + 限频参数可调 |
-| 阶梯优惠泄漏给非目标客户 | 价格穿帮 | 阶梯只在符合条件客户回显；公开渠道不暴露 |
-| 软干预触发频繁 | 客户疲劳 | 30 天冷却 + 每客户每周最多触发 N 次 |
+| 让步预算泄漏 | 客户摸清底牌后无限砍 | 预算只在系统内；LLM 输出经 DLP 扫禁词 |
+| 议价 LLM 编造让步条件 | 销售背锅 | LLM 不出价/不许愿；所有数字从结构化方案直接渲染 |
+| 客户用虚假竞品施压 | 错失或赔本 | 系统记录历次竞品提及；多次提同价未走，可信度↓；销售自行判断 |
+| 整单优化算错跨项让步 | 整单赔本 | 整单加权毛利底线校验；算法决策走审计 |
+| 求利型陷入无限议价 | 时间成本 | 5 轮上限；末端强制转人工 |
+| 求量型客户被骗加量 | 客户信任损失 | 量绑定方案必须诚实标注新均价；不能玩文字游戏 |
+| 议价 + 软干预冲突 | 体验混乱 | 议价中暂停软干预降档；议价结束后恢复 |
+| 销售在 Bot 外口头给低价 | 系统价格失控 | 销售口头 offer 必须 30 分钟内在 Bot 里登记；超时报警 |
+| 跨天议价行情变了 | 报价过期 | 跨天恢复时校验当前底价；变了自动提示销售重报 |
+| 客户情绪激动被 Bot 顶撞 | 客情危机 | 情绪检测 ≥ strong 立即转人工 |
+| 议价话术机械化 | 客户察觉 AI | LLM + 销售微调 + 自然多样话术库 |
+| 自动让步过快被薅 | 毛利失守 | 让步节奏由曲线控制；销售不能"加速" |
 
 ---
 
 ## 12. 后续演进
-- LLM Function Calling 加入 `propose_quote` 工具，让 LLM 在多轮里组织报价话术（但价格仍来自 Pricing Engine）。
-- 客户行为预测：用历史数据预测"客户下次下单概率"，提前推送优惠。
-- 销售业绩看板 + Bot 自动周报。
-- 报价多版本对比（A/B 不同策略）。
-- 行业行情联动：钢联/Mysteel 大盘动 → 自动调整基价。
-- LoRA 微调 + 客户专属模板。
+
+- **议价 RL（强化学习）**：用历史议价数据训练让步策略（哪个客户哪轮让多少最优）。
+- **竞品价格数据库**：销售可登记竞品报价 → 系统判断真假 + 整体行情走向。
+- **多客户协同**：同区域客户都在砍同样品种 → 行情分析 → 给销售总监行情提示。
+- **议价 A/B**：不同让步曲线在不同客群上跑 A/B，找最优。
+- **销售助理小程序**：议价桌面端面板，销售一眼看到所有当前议价 session。
+- LLM Function Calling 直接驱动整个议价循环（含 propose_quote/negotiate_round/accept_offer），但**关键决策仍走规则引擎**。
 
 ---
 
 ## 13. 版本演进对比
 
-| 维度 | v3 | v4 | v5 | **v6** |
-|---|---|---|---|---|
-| 询价输入 | 文字 | 文字/图/Excel/PDF | 同 | 同 |
-| 询价字段 | 5 | 7 | 9 | 同 |
-| NLU 策略 | LLM | LLM | KB + 默认推断 + 字段级溯源 | 同 |
-| **报价** | **销售单干** | **销售单干** | **销售单干** | **三档协作（Auto/Assisted/Manual）** |
-| **客户画像** | — | — | 偏好画像（询价默认值） | **完整画像引擎（5 类型 + 名单 + 信用 + 行为 + Ghost）** |
-| **库存匹配** | — | — | — | **多源 + 组合优化 + 运费 + MOQ** |
-| **报价策略** | — | — | — | **可配置策略引擎（11+ 策略 + 成本红线）** |
-| **行为干预** | — | — | — | **5 层渐进式 + 差异化话术 + 反向激励** |
-| **MOQ / 不过磅** | — | — | — | **品类 MOQ 表 + per_piece 模式** |
-| **纯询价** | — | — | — | **指导价 + 极短锁价** |
-| **黑白名单** | — | — | — | **分级（上浮/现款/预付/拒报）** |
+| 维度 | v3 | v4 | v5 | v6 | **v7** |
+|---|---|---|---|---|---|
+| 询价输入 | 文字 | 文字/图/Excel/PDF | 同 | 同 | 同 |
+| 询价字段 | 5 | 7 | 9 | 同 | 同 |
+| NLU 策略 | LLM | LLM | KB+默认+溯源 | 同 | 同 |
+| 报价 | 销售单干 | 同 | 同 | 三档协作 | 同 |
+| 客户画像 | — | — | 偏好 | 完整画像 | 同 |
+| 库存匹配 | — | — | — | 多源组合 | 同 |
+| 报价策略 | — | — | — | 11 策略 | 同 |
+| 行为干预 | — | — | — | 5 层 | 同 |
+| **议价** | — | — | — | — | **多轮状态机 + 让步曲线** |
+| **让步货币** | — | — | — | — | **8 维（价/量/时/运/期/质/赠/组）** |
+| **整单优化** | — | — | — | — | **跨项让步分配 + 整单底线** |
+| **议价 LLM** | — | — | — | — | **带预算的议价话术 + 情绪检测** |
+| **议价审计** | — | — | — | — | **全轮 offer + 销售决策落库** |
 
 ---
 
-## 14. 附录：报价场景样例（v6 新增）
+## 14. 附录：议价场景样例（v7 新增）
 
-| 场景 | 客户画像 | 输出策略 | 锁价 | 客户体感 |
-|---|---|---|---|---|
-| 新客首次询 50t 螺纹 | new + normal + ghost=0.1 | new_customer_attractive | 6h | 欢迎话术 + 首单 -10 |
-| 量型老客询 80t | volume + whitelist + ghost=0.2 | whitelist_discount + volume_driven_lowest | 24h*1.5=36h | 拼仓 + 阶梯优惠 + 长锁价 |
-| 利型客户询 30t | profit + normal + ghost=0.15 | profit_quality_first | 24h | 优质短锈 + 质保 + 中等价 |
-| 黑名单上浮级 | volume + blacklist(uplift) | blacklist_uplift | 2h | 上浮 3% + 现款 |
-| 流失客户回归询价 | churn + normal | churn_callback | 12h | 唤回价 -30 + 销售跟进 |
-| 频繁询价不下单 | volume + normal + ghost=0.65 | volume_driven_lowest + explorer_throttle | 6h（被覆盖） | 阶梯隐藏 + 短锁价 + 销售关怀 |
-| 同规格 24h 内重复 | 任意 + 命中 L1 | repeat_inquiry_quote_reuse | 复用 | "已为您报过" |
-| 询价 25t（MOQ 30t） | 任意 | moq_unweighed | 24h | 按支报价 |
-| 询价无数量 | 任意 | no_qty_indicative | 1h | 指导价 |
-| 超大单 600t | volume + whitelist + 大额触发 Manual | Manual | 销售决定 | "销售小张为您专项跟进" |
+### 样例 1：求利型客户 3 轮议价
+```
+[首报价] 螺纹 HRB400 25mm 50t 沙钢武汉 ¥3,820/t 锁 24h
+客户："3780 我才下"
+[round 1] 让 ¥15 + 锁价延长到 48h → ¥3,805
+客户："3795 吧"
+[round 2] 让 ¥5 + 材质书优先 → ¥3,800
+客户："3790 行不行"
+[round 3] 价不动，运费兜底 ¥20 → 等价 ¥3,780（运到货价）
+客户："好，定"
+[结果] AGREED，让步预算用 60%，毛利保住 ¥110/t
+```
+
+### 样例 2：求量型客户量价绑定
+```
+[首报价] 螺纹 50t ¥3,820
+客户："3780 行的话我下"
+[round 1] 不直接降价，给量绑定方案：加到 70t 单价 ¥3,795
+客户："那 80t 呢"
+[round 2] 80t ¥3,790（再让 ¥5）
+[结果] AGREED 80t 整单，整单毛利反而比 50t 降 ¥30 更高
+```
+
+### 样例 3：整单议价
+```
+客户：螺纹 50t + 工字钢 30t + 中板 20t
+[首报价整单] ¥384,000 毛利率 5.6%
+客户："螺纹再降 30 吧"
+[round 1 - 跨项分配 方案 B]
+  螺纹保 ¥3,820
+  中板让 ¥40/t → 整单让 ¥800 + 工字钢锁价延长
+客户："那螺纹真不能再让点？"
+[round 2 - 方案 D]
+  整单一口价 ¥382,300（让 ¥1,700），不再逐项谈
+[结果] AGREED 整单
+```
+
+### 样例 4：客户用竞品施压 + 系统记录
+```
+客户："X 家给我报 3750"
+系统检测：该客户半年内 4 次提"X 家 3750"但都未走 X 家
+Bot 给销售标记：「客户疑似虚价施压，过去 4 次同话术成单于我方」
+销售选话术：「咱们家这批沙钢直发，材质书一炉一证。3750 真要走，
+            我得汇报老板，您容我半小时回您」
+客户半小时后："算了 3795 也行"
+[结果] AGREED ¥3,795
+```
+
+### 样例 5：求利型客户 5 轮死磕 → 转人工
+```
+[round 1~4] 让步预算耗尽，客户仍砍
+[round 5] 触发转人工：「张总，这价咱们得让小张当面跟您细聊」
+[销售接管] 销售判断后给"友情价" -¥10 + 长期合作承诺
+[结果] AGREED + override_audit_log
+```
+
+### 样例 6：跨天议价行情大跳
+```
+[Day1 18:00] 首报价 ¥3,820，客户考虑
+[Day2 09:00] 客户："我接受 ¥3,820 了"
+系统检测：Day2 早盘螺纹大涨 ¥40/t
+Bot 给销售提示："客户接受昨日报价，但当前行情已涨 ¥40
+                 建议：1) 礼貌按今日 ¥3,860 重报；2) 仍按昨日价
+                 您看如何处理？"
+销售可选维持承诺（亏 ¥40 守信） 或 重报（要解释）
+```
+
+### 样例 7：求利型客户多维要求
+```
+客户："价让 30 + 送货到厂 + 账期 30 天"
+拆分让步：
+  价让 30 → 成本 ¥1,500
+  送货到厂 → 成本 ¥1,000（运费）
+  账期 30 天 → 资金成本 ~¥1,200
+合计成本 ¥3,700，远超让步预算 ¥1,500
+
+系统建议方案：
+  方案 A：让 ¥15 + 送货 → 总成本 ¥1,750（小超）
+  方案 B：让 ¥10 + 账期 15 天 → 总成本 ¥1,100
+  方案 C：让 ¥20 不送货不账期 → 总成本 ¥1,000
+
+销售选 B，话术：
+  "送货咱们这块儿不行，但账期 15 天没问题，价再让 ¥10。
+   您看：¥3,810 自提 + 15 天账期"
+```
 
 ---
 
 ## 15. 待需求方确认
 
-1. 业务系统能否开发 Inbound Webhook？
-2. 业务 API 是否支持创建询价（9 要素 + 批量）、查库存（多源/属性/库位）、提交报价方案？
-3. 询价 ERP 报价流：逐 item 还是整单？
-4. 报价回推是否附 PDF？
-5. 询价 9 要素 ERP 必填/可空？
-6. **客户画像主权归属：Bot 维护 vs 同步 CRM？冲突优先级？**（v6 关键）
-7. **价格策略配置后台：是否需要？谁来维护（运营/销售总监/老板）？**（v6 关键）
-8. **客户分类规则：是否需要按公司业务调整默认阈值（新客 90 天？P75 量？）**
-9. **品类 MOQ 表**：每个品类的最低过磅量是多少？
-10. **黑名单分级阈值**：上浮多少、什么情况进 cash_only、什么时候 refuse？
-11. **战略客户名单**由谁维护？变更审批流？
-12. **成本价数据源**：是否能实时从 ERP 拉？还是用每日快照？
-13. **Auto 档位金额上限**：单笔多少以下才能 Auto 直接报？
-14. **Ghost Score 阈值**和触发软干预的细则，需求方是否需要自己调？
-15. 付款凭证 OCR、多 sheet 策略、文件保留、VL 预算、SLA、客户绑定方式、群聊场景（同 v5）
+新增 v7 关键问题：
+
+16. **议价是否允许 Auto 档客户直接进议价**？还是任何议价都强制升档到 Assisted？
+17. **让步曲线节奏**（求利 0.5/0.25/0.1 / 求量量绑定为主 / 战略 0.7 一次给）是否符合公司业务？
+18. **整单议价的整单加权毛利底线**是多少？（影响 Optimizer 决策）
+19. **8 种让步货币是否都允许 Bot 用**？账期延长涉及信用是否要走风控审批？
+20. **议价话术 LLM 是否需要按销售个人风格定制**？还是公司统一话术池？
+21. **议价轮数上限**默认 5 轮，业务方意见？
+22. **跨天议价行情变化处理**：自动按今日价 / 按昨日承诺 / 提示销售人工决定？
+23. **客户多次提虚假竞品的处理策略**：系统标注后销售如何应对？是否要积分式信用扣减？
+
+继续保留 v3~v6 已有的 1~15 个问题。
