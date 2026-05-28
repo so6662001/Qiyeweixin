@@ -1,677 +1,839 @@
-# 企业微信机器人 — 设计文档（v5）
+# 企业微信机器人 — 设计文档（v6）
 
 > 状态：设计阶段（尚未开发）
 > 行业：**钢铁贸易**
-> 目标：搭建一个企业微信智能机器人，对接公司已有的 8 项后端能力（查留货订单 / 查欠款 / **询价（4 种输入：文字/图片/Excel/PDF）** / 查装车重量 / 要材质书 / 接收或查结算单 / 接收付款凭证 / 提醒销售发货），覆盖内部员工和外部微信客户，接入 LLM（DeepSeek / 通义千问，含 VL 视觉模型）做自然语言理解、多模态解析与多轮对话。
-> **v5 核心**：钢铁贸易自然语言询价的语义抽取（含品类/规格/材质/产地/长度/标准/数量/重量/单重 9 要素），引入**钢铁知识库**和**默认值推断引擎**。
+> 目标：搭建一个企业微信智能机器人，对接 8 项后端能力，覆盖内部员工和外部微信客户，接入 LLM（DeepSeek / 通义千问，含 VL 视觉模型）。
+> **v6 核心**：把"询价 → 销售单干报价"升级为「**自动/辅助/人工」三档报价 + 客户画像引擎 + 报价策略引擎 + 库存组合匹配 + 行为干预**」。
 
 ---
 
 ## 0. 需求方已确认的关键约束
 
-| # | 问题 | 答复 | 对设计的影响 |
-|---|---|---|---|
-| 1 | 用户范围 | 内部 + 外部微信用户 | 双通道 |
-| 2 | 业务 API | 已具备，不可改造 | ACL 适配 |
-| 3 | 绑定账号 | 必须 | 强绑定 + 数据级权限 |
-| 4 | 多轮对话 | 跨天、多意图 | Topic + Task |
-| 5 | 部署 | 公网云，已备案 | 云原生 |
-| 6 | 行业 | 钢铁贸易 | 强权限 + DLP + 审计 |
-| 7 | LLM | DeepSeek + 通义千问 | 双路由 |
-| 8 | 后端能力 | 8 项 | 工单 + 反向回调 + 文件管道 |
-| 9 | 询价输入形态 | 文字/图片/Excel/PDF | 多模态解析 + VL |
-| 10 | **询价自然语言复杂度（v5）** | **9 要素混排、地域/品类/客户讲法各异、省略=默认** | **新增钢铁知识库 + 默认值推断引擎 + 字段级溯源；扩展 InquiryItem；反问策略升级** |
+| # | 答复 | 影响 |
+|---|---|---|
+| 1 | 内 + 外双通道 | 自建应用 + 微信客服 |
+| 2 | 业务 API 不可改 | ACL |
+| 3 | 必须绑定 | 数据级权限 |
+| 4 | 多轮、跨天、多意图 | Topic + Task |
+| 5 | 公网云、域名已备案 | 云原生 |
+| 6 | 钢铁贸易 | 强权限 + DLP + 审计 |
+| 7 | DeepSeek + 通义千问 | LLM 双路由 |
+| 8 | 8 项后端能力 | 工单 + 反向回调 + 文件管道 |
+| 9 | 询价 4 形态 | 多模态解析 + VL |
+| 10 | 询价 9 要素口语化 | KB + 默认推断 + 字段级溯源 |
+| **11（v6 新）** | **多库存/多价格、客户特性差异、量级分层、MOQ、黑白名单、白嫖客户管理** | **报价策略引擎 + 客户画像引擎 + 三档协作 + 行为干预** |
 
 ---
 
 ## 1. 需求与目标
 
-### 1.1 8 项能力的形态分类（同 v4）
-
-略，参考 v4。
-
-### 1.2 询价 4 种形态（同 v4）
-
+### 1.1~1.4 同 v5
 略。
 
-### 1.3 询价自然语言 9 要素（v5 新增）
+### 1.5 报价决策矩阵（v6 核心）
 
-| 要素 | 字段 | 例子 | 是否常被省略 |
+#### 1.5.1 三档协作模型
+
+| 档位 | 触发条件 | 谁出价 | 客户体感 |
 |---|---|---|---|
-| 品类 | category | 螺纹钢 / 盘螺 / 线材 / 中厚板 / 热轧卷 / 冷轧卷 / H 型钢 / 工字钢 / 槽钢 / 角钢 / 无缝管 / 焊管 / 镀锌管 / 圆钢 / 方钢 | 很少省略 |
-| 规格 | spec | Φ25 / 25mm / 14# / DN50 / 108×4.5 / 6.0×1500×C / 200×200×8×12 | 很少省略 |
-| 材质（牌号） | grade | HRB400 / Q235B / Q355B / 45# / SS400 / SUS304 | **经常默认**（按品类） |
-| 产地（钢厂） | origin | 沙钢 / 永钢 / 中天 / 萍钢 / 武钢 / 宝钢 | **经常默认**（按客户偏好） |
-| 长度（定尺） | length | 9m / 12m / 定尺 / 倍尺 / 非定尺 | **经常默认**（12m 国标） |
-| 标准 | standard | GB/T 1499.2 / GB/T 3091 / GB/T 8162 / GB | **几乎都省略**（默认国标） |
-| 数量 | qty + qty_unit | 100 吨 / 50 根 / 30 件 / 5 卷 | 很少省略 |
-| 重量 | weight + unit | 由 qty + unit_weight 换算 | 计算字段 |
-| 单重 | unit_weight | 来自理论重量表（如 螺纹钢 Φ25 = 3.85 kg/m） | 计算字段 |
+| **A. 即时自动报价 (Auto)** | 白/标准客户 ∧ 标准品 ∧ 量在阈值内 ∧ 库存充足 ∧ 风险低 | Bot 直接出 | 秒级响应 |
+| **B. 辅助报价 (Assisted)** | 大多数情况 | Bot 出**建议方案**→销售一键确认/调整→回客户 | 几分钟内 |
+| **C. 人工报价 (Manual)** | 黑名单 / 超大单 / 非标 / 复杂组合 / 信用警告 | 销售全程，Bot 仅传话 | 30 min 内 |
 
-**重要原则**：
-- "省略 ≠ 没有"，而是"约定俗成的默认"
-- 默认值必须 **显式标注** 出来给客户看（标 `🤖默认`），让客户能修正
-- 绝不能"偷偷"用默认值进 ERP
+**判定流程**：
+```
+parse_inquiry 完成
+   ↓
+风险评估（5 项）：
+  1. 客户名单（白/普/黑）
+  2. 客户信用（正常/警告/冻结）
+  3. 单笔总额 vs 阈值
+  4. 品类是否标准品
+  5. 是否需要锁价/账期
+   ↓
+→ Manual：任一红灯
+→ Auto：全绿灯 + 白名单/老客 + 量 ≤ 阈值
+→ Assisted：其余
+```
 
-### 1.4 同义/异写问题示例（v5 新增）
+#### 1.5.2 策略选择矩阵
 
-**品类同义**：
-- 螺纹钢 = 螺纹 = 螺纹筋 = 罗纹 = 螺四（HRB400 口语）= 三级螺纹 = 抗震螺纹
-- 中厚板 = 中板 = 钢板 = 板材 = 中厚
-- H 型钢 = H 钢 = H 型 = 宽翼缘
-- 工字钢 = 工钢 = 工 = 普工
-- 槽钢 = 槽 = 普槽
-- 角钢 = 角铁
-- 无缝管 = 无缝
-- 焊管 = 焊接钢管 = 直缝焊管 = 黑管
-- 镀锌管 = 白管 = 锌管 = 镀锌
-- 热轧 = 热轧卷 = 热卷 = 卷板
-- 冷轧 = 冷轧卷 = 冷卷
+| 客户类型 → | 新客 | 量型 | 利型 | 战略 | 流失 |
+|---|---|---|---|---|---|
+| **白名单** | 入门优惠 + 短锁价 | 量优底价 + 长锁价 | 质优策略 + 标准锁价 | 战略价 + 超长锁价 | 唤回价 + 限时 |
+| **普通** | 标准价 + 短锁价 | 量阶梯 + 标准锁价 | 质优策略 | 战略价 | 标准价 + 销售跟进 |
+| **黑名单** | 拒报 / 转销售 | 上浮 5%~20% + 现款 | 上浮 + 现款 | （不应存在） | 拒报 |
 
-**规格异写**：
-- 螺纹 Φ25 = D25 = 25 = 直径25
-- 工字钢 14# = 工14 = 14号 = I14
-- 槽钢 16# = 槽16
-- H 型钢 200×200×8×12 = HW200 = 200H
-- 角钢 ∠50×50×5 = L50×5 = 50角
-- 无缝管 Φ108×4.5 = 108×4.5 = 108的 4.5壁厚
-- 圆钢 Φ20 = 20圆
-- 卷板 6.0×1500×C = 6×1500（默认 C 卷）
+#### 1.5.3 量级策略
 
-**材质（牌号）旧/新/口语**：
-- 螺纹钢：HRB400 = 三级 = 三级钢 = 抗震
-- HRB335 = 二级（已淘汰，要识别）
-- HPB300 = 一级 = 圆钢盘条
-- 板材：Q235 = 普碳 = 普通碳钢
-- Q355 = 16Mn（老标号）= 低合金
-- 优质碳素：45# = 45号钢
-- 不锈钢：304 / 316L
-- 日标：SS400 ≈ Q235
-
-**钢厂别名**：
-- 沙钢 = 江苏沙钢
-- 中天 = 中天钢铁
-- 永钢 = 江苏永钢
-- 萍钢 = 江西萍钢
-- 武钢 / 宝钢 / 鞍钢 / 首钢 / 河钢 / 安钢 / 马钢 / 莱钢 / 济钢
-- 北方常用：河钢、首钢、鞍钢
-- 长三角：沙钢、永钢、中天、马钢
-- 华南：广钢、韶钢、湘钢
-
-**单位/数量歧义**：
-- "100 吨" → qty=100, unit=吨
-- "100 根" → qty=100, unit=根 → 需要乘理论单重换算成吨
-- "10 个" 在"中板10个"里 = 10mm 厚度（不是数量！）
-- "几车" / "一车货" 模糊，按 30~33 吨/车 估算并反问
+| 询价量 / 整单量 | 处理 |
+|---|---|
+| 量 < 品类 MOQ | 标"**不过磅销售**"（按支/根/件计费） |
+| MOQ ≤ 量 < 标准段 | 标准报价（按吨过磅） |
+| 量 ≥ 大宗阈值 | 阶梯优惠 + 可锁价更长 |
+| **没有量（纯询价）** | 出**指导价 (indicative)** + 注明"实际成交以提货时为准" |
+| 多规格组合询价 | 总量合并算阶梯（按客户类型决定） |
 
 ---
 
-## 2. 通道选型（同 v4）
-
-略。
-
----
-
-## 3. 总体架构（v5）
+## 2. 通道选型 / 3. 总体架构（v5 基础 + v6 新模块）
 
 ```
-                    ┌──────────────────────────────────────┐
-   普通微信用户  ──▶│  微信客服 (kf_*)                       │
-   企业微信员工  ──▶│  自建应用                              │
-                    └────────────────┬─────────────────────┘
-                                     │ 回调 (加密)
-                                     ▼
-   ┌────────────────────────────────────────────────────────────────┐
-   │                       Bot Gateway                                │
-   │  Callback → Channel Adapter → Identity/Binding → Permission     │
-   │           → Fast Path Router                                    │
-   │              ↓                  ↓                                │
-   │   Session State Manager        Command Handler                   │
-   │              ↓                                                   │
-   │   LLM Orchestrator (DeepSeek / Qwen 文本 + VL)                   │
-   │              ↓                                                   │
-   │   Tool Registry (Function Calling)                               │
-   │              ↓                                                   │
-   │   Business API Adapter (ACL) ──▶ 现有业务 API                    │
-   │              ↓                                                   │
-   │   Reply Composer + DLP ──▶ WeCom API Client                      │
-   │                                                                  │
-   │  ─────────────── 询价能力栈（v3~v5 累积）─────────────────────  │
-   │                                                                  │
-   │  ① Workflow Engine        ② Inbound Webhook                     │
-   │  ③ Media Pipeline                                                │
-   │                                                                  │
-   │  ④ Inquiry Parser  (v4)                                          │
-   │      文字 / 图片 / Excel / PDF → InquiryDraft                    │
-   │      ┌────────────────────────────────────────┐                 │
-   │      │  v5 新增子组件                          │                 │
-   │      │                                         │                 │
-   │      │  ⑤ Steel Knowledge Base                 │                 │
-   │      │      品类/材质/规格/钢厂/标准词典       │                 │
-   │      │      规格正则、理论重量公式             │                 │
-   │      │                                         │                 │
-   │      │  ⑥ Default Resolver                     │                 │
-   │      │      客户偏好 + 地区默认 + 品类默认     │                 │
-   │      │      销售关联默认                       │                 │
-   │      │      输出 source 标签                   │                 │
-   │      │                                         │                 │
-   │      │  ⑦ Field-Level Tracer                   │                 │
-   │      │      每字段：值 + 置信度 + 来源        │                 │
-   │      │      explicit/inferred/missing          │                 │
-   │      │                                         │                 │
-   │      │  ⑧ Reask Strategy                       │                 │
-   │      │      只问 critical missing               │                 │
-   │      │      默认值显式回显让客户确认            │                 │
-   │      └────────────────────────────────────────┘                 │
-   └────────────────────────────────────────────────────────────────┘
+   ...省略前置（Callback / Channel / Identity / Permission / Router / Session / LLM / Tools / ACL / Reply / WeCom）...
 
-   ┌──────────┐  ┌──────────┐  ┌──────────────┐  ┌────────────────┐
-   │  Redis   │  │ Postgres │  │ Async Worker │  │ Audit / DLP    │
-   │ token/ctx│  │ 绑定/会话│  │ LLM/解析/    │  │ ES / SLS / OSS │
-   │ KB cache │  │ KB/偏好  │  │ 工单/推送    │  │ 解析/推断日志   │
-   │ 限流/锁  │  │ 工单/审计│  │              │  │                │
-   └──────────┘  └──────────┘  └──────────────┘  └────────────────┘
+   ─────────── v6 新增模块 ───────────
+
+   ⑨ Customer Profile Engine（客户画像引擎）
+      - 自动分类：新客/量型/利型/战略/流失
+      - 名单：白/普/黑（黑名单分级）
+      - 信用：正常/警告/冻结
+      - 行为画像：转化率/平均吨位/DSO/品类集中/白嫖系数
+      - 销售可手动覆盖
+      - 周期更新（小时 + 实时事件）
+
+   ⑩ Pricing Strategy Engine（报价策略引擎）
+      - 输入：InquiryItem + customer_profile + inventory_options
+      - 策略库（可配置规则）：
+          new_customer_attractive
+          volume_driven_lowest
+          profit_quality_first
+          strategic_anchor
+          churn_callback
+          blacklist_uplift / cash_only / refuse
+          whitelist_discount
+          moq_unweighed
+          no_qty_indicative
+          repeat_inquiry_quote_reuse
+          explorer_throttle
+          ghost_minimum
+      - 输出：QuoteOption[] + price_breakdown + valid_until + 备注
+
+   ⑪ Inventory Matcher（库存组合匹配）
+      - 同规格多库存源（仓库/批次/品质）
+      - 组合优化：单源最便宜 vs 多源拼单 vs 含运费总成本
+      - MOQ 校验 + 不过磅模式
+
+   ⑫ Conversion Behavior Tracker（行为漏斗追踪）
+      - 询价→报价→锁价→下单 漏斗
+      - 时间窗口指标（7/30/90 天）
+      - 自动分类信号 + 异常告警
+
+   ⑬ Soft Influence Module（软影响 / 行为干预）
+      - 回执话术按客户画像差异化
+      - 锁价时长差异化
+      - 重复询价压制
+      - 销售介入触发
+      - 5 层渐进式机制（详见 5.21）
 ```
 
 ---
 
-## 4. 关键流程（v5 重点：询价文字解析）
+## 4. 关键流程（v6 重写询价报价闭环）
 
-### 4.1 同步查询类（同 v4）
-略。
-
-### 4.2 询价（文字分支详细流程，v5 重写）
+### 4.2 询价 → 报价 全链路（v6 重写）
 
 ```
-═══ 阶段 0：客户输入 ════════════════════════════════════════════
-客户 → "要50吨螺四 25 沙钢的"
+═══ 阶段 A：解析（v4/v5）═════════════════════════════════════
+parse_inquiry：文字/图/Excel/PDF → InquiryDraft → 客户确认
 
-═══ 阶段 1：Tokenize + 候选标注 ═══════════════════════════════════
-拆词 + 行业实体识别（基于 Steel KB）：
-  「要」     - 动词忽略
-  「50吨」   - 数量 qty=50, unit=吨
-  「螺四」   - 同义词命中 → category=螺纹钢, grade=HRB400
-  「25」     - 规格候选（孤数字 → 联合上下文判断为直径）
-              category=螺纹钢 时 25 → spec=Φ25mm
-  「沙钢」   - 钢厂别名 → origin=江苏沙钢
-  「的」     - 助词忽略
+═══ 阶段 B：客户画像注入 (v6) ═════════════════════════════════
+Customer Profile Engine 查：
+  profile = {
+    type: 量型, list: 普通, credit: 正常,
+    behavior: {
+      inquiry_30d: 12, deal_30d: 2, conversion_rate: 0.17,
+      avg_ton: 80, dso_days: 45, profit_margin_hist: 4.2%,
+      categories_dominant: [螺纹钢, 中厚板],
+      ghost_score: 0.62,    // 越高越像白嫖
+    }
+  }
 
-═══ 阶段 2：LLM 函数调用（带 few-shot + KB 注入）═══════════════════
-喂给 LLM 的 prompt：
-  - System: 钢铁询价助手人设 + 9 要素 JSON schema
-  - KB Snapshot: 同义词、规格正则、单位规则（裁剪后注入）
-  - Few-shot: 5~10 个真实询价 → 标准输出样例
-  - History: 当前 Topic 历史
-  - User: 当前消息 + 候选标注
-
-LLM 输出（带 source/confidence）：
-{
-  "items": [{
-    "row_no": 1,
-    "category":   {"value":"螺纹钢", "source":"explicit",      "confidence":0.99},
-    "grade":      {"value":"HRB400", "source":"explicit",      "confidence":0.99,
-                   "note":"由『螺四』推得"},
-    "spec":       {"value":"Φ25mm",  "source":"explicit",      "confidence":0.93},
-    "origin":     {"value":"沙钢",   "source":"explicit",      "confidence":0.97},
-    "length":     {"value":null,     "source":"missing"},
-    "standard":   {"value":null,     "source":"missing"},
-    "qty":        {"value":50,       "source":"explicit",      "confidence":0.99},
-    "qty_unit":   {"value":"吨",     "source":"explicit",      "confidence":0.99},
-    "unit_weight":{"value":null,     "source":"missing"},
-    "dest_city":  {"value":null,     "source":"missing"}
-  }]
+═══ 阶段 C：风险评估 + 档位判定 (v6) ═══════════════════════════
+risk = {
+  list_red: false,        // 黑名单
+  credit_red: false,      // 信用警告/冻结
+  amount_red: false,      // 单笔 > 500w
+  nonstandard: false,     // 非标规格
+  needs_lock: false       // 客户要求锁价
 }
+→ 档位 = Assisted（默认）
 
-═══ 阶段 3：Default Resolver 补齐 ═════════════════════════════════
-按优先级：客户偏好 > 销售-客户绑定默认 > 地区默认 > 品类默认
-
-length 缺失:
-  - 查客户偏好：客户 张总 历史 12 次询螺纹，11 次定 12m → 推断 12m
-  → length = {value:"12m", source:"inferred_customer_pref", confidence:0.85,
-              note:"按您历史习惯默认 12米定尺"}
-
-standard 缺失:
-  - 品类默认：螺纹钢 → GB/T 1499.2
-  → standard = {value:"GB/T 1499.2", source:"inferred_industry_default",
-                confidence:0.95, note:"国标"}
-
-unit_weight 缺失:
-  - 计算字段：螺纹 Φ25mm 理论重量 = 3.85 kg/m
-  → unit_weight = {value:3.85, unit:"kg/m", source:"calculated",
-                   confidence:1.0}
-
-dest_city 缺失:
-  - 客户偏好：常发武汉 → 推断武汉？
-  - 但目的地是高风险字段，**不自动推断**，标 critical_missing
-  → dest_city = {value:null, source:"missing", critical:true}
-
-═══ 阶段 4：合理性校验 + 派生计算 ══════════════════════════════════
-- 规格在合理范围（Φ6~Φ50）✓
-- qty>0 ✓
-- 派生 total_weight = qty * (无需，qty 已是吨) 或 qty * unit_weight / 1000
-
-═══ 阶段 5：回显客户（Markdown）═══════════════════════════════════
-"📋 已解析您的询价（置信度 91%）：
-
-| 项 | 值 | 来源 |
-|---|---|---|
-| 品类 | 螺纹钢 | ✏️您说的 |
-| 牌号 | HRB400 | ✏️『螺四』推得 |
-| 规格 | Φ25mm | ✏️您说的 |
-| 产地 | 沙钢 | ✏️您说的 |
-| 数量 | 50 吨 | ✏️您说的 |
-| 长度 | 12米 | 🤖按您历史默认 |
-| 标准 | GB/T 1499.2 国标 | 🤖行业默认 |
-| 单重 | 3.85 kg/m | 🧮理论重量 |
-| 目的地 | ❓ 缺失 | 请补充 |
-
-回复『武汉』补充目的地后即可提交；
-或回复『长度 9米』修改默认；
-或『取消』丢弃。"
-
-═══ 阶段 6：反问/确认 → 提交工单 ══════════════════════════════════
-客户回 "武汉"
-   ↓
-Default Resolver 把 dest_city=武汉 写回
-   ↓
-所有 critical_missing 已补齐 → submit_inquiry → 工单创建 → 销售报价 → 回推
-   ↓
-parse_log 落库（input/output/source/客户修正）
-偏好库更新：dest_city=武汉 计数 +1（下次默认置信度提高）
-```
-
-### 4.3~4.7 其余流程（同 v4）
-略。
-
----
-
-## 5. 模块设计（v5）
-
-### 5.1~5.11 模块（同 v4）
-略，沿用。
-
-### 5.12 Inquiry Parser（v5 强化）
-
-总流程：
-
-```
-输入 → Modality Branch (文字/图片/Excel/PDF) → 候选标注（KB 实体识别）
-     → LLM 抽取 (function calling + few-shot + KB 注入)
-     → Default Resolver (按优先级补齐缺失)
-     → 合理性校验 + 派生计算
-     → Field-Level Tracer 打标 (explicit / inferred / calculated / missing)
-     → Reask Strategy (只问 critical missing)
-     → 回显模板 → 客户确认 → 提交
-     → parse_log 落库 → 偏好库更新
-```
-
-文字分支的子步骤：
-
-1. **预处理**：去标点、统一全半角、把"廿/卅"等数字大写转阿拉伯。
-2. **实体标注（KB 匹配）**：用 Aho-Corasick 多模匹配 KB 里的同义词，把"螺四 / 中板 / 工14 / 沙钢 / DN50"等高置信实体先打上标签。这是 LLM 之前的"硬规则层"，提高准确率和省 token。
-3. **LLM 抽取**：输入 = 原文 + 已标注实体 + 历史 Topic + Few-shot。
-4. **Default Resolver 补齐**：见 5.14。
-5. **合理性校验**：规格落在合理钢标范围、数量 > 0、单位匹配、互斥字段检查（HRB400 不能配"圆钢盘条"）。
-6. **派生计算**：理论单重、总重量。
-7. **Critical Missing 判定**：哪些缺失必须反问、哪些可走默认。
-8. **回显模板**：表格 + 来源标签 + 操作菜单。
-
-### 5.13 Steel Knowledge Base（v5 新增核心模块）
-
-**5.13.1 内容**
-
-| 子库 | 内容 | 维护方式 |
-|---|---|---|
-| `category` | 品类标准名 + 同义词 + 子类型 | 配置文件 + 后台 |
-| `grade` | 材质牌号 + 旧称 + 口语 + 适用品类 | 配置 |
-| `spec_pattern` | 各品类的规格正则与归一化规则 | 配置 |
-| `origin` | 钢厂标准名 + 别名 + 所属区域 | 配置 |
-| `standard` | 国标/行标/外标编号 + 适用品类 | 配置 |
-| `unit_weight_table` | 各品类/规格的理论单重（kg/m 或 kg/张） | 配置 |
-| `term_glossary` | 行业术语（定尺/倍尺/开平/卷板/横切…） | 配置 |
-| `regional_alias` | 各地区对同一品类的常用叫法 | 配置 |
-
-**5.13.2 示例数据结构**
-
-```json
-// category
-{
-  "id": "rebar",
-  "canonical_name": "螺纹钢",
-  "aliases": ["螺纹", "螺纹筋", "罗纹", "螺四", "三级螺纹", "抗震螺纹"],
-  "default_grade": "HRB400",
-  "default_length": "12m",
-  "default_standard": "GB/T 1499.2",
-  "regions_preferring": ["全国"]
-}
-
-// spec_pattern (rebar)
-{
-  "category_id": "rebar",
-  "patterns": [
-    {"regex": "^[Φφ∅Dd]?(\\d{1,2})(?:mm)?$", "type": "diameter",
-     "normalize": "Φ${1}mm", "valid_range": [6, 50]}
+═══ 阶段 D：库存匹配 (v6) ════════════════════════════════════
+Inventory Matcher 查：
+  options = [
+    {warehouse:'武汉江夏', stock_ton:30, base_price:3820, attrs:'标准品'},
+    {warehouse:'武汉江夏', stock_ton:50, base_price:3790, attrs:'倍尺'},
+    {warehouse:'襄阳',     stock_ton:100,base_price:3750, attrs:'长锈轻锈'},
+    {warehouse:'武汉江岸', stock_ton:20, base_price:3850, attrs:'优级'}
   ]
-}
 
-// unit_weight_table (rebar)
-{ "category_id":"rebar", "spec":"Φ25mm", "unit_weight": 3.85, "unit":"kg/m" }
+═══ 阶段 E：策略应用 (v6 核心) ═══════════════════════════════
+Pricing Strategy Engine 按 (profile.type × profile.list × 量级) 选策略：
 
-// origin
-{
-  "id": "shagang",
-  "canonical_name": "江苏沙钢",
-  "aliases": ["沙钢", "Shagang"],
-  "region": "长三角"
-}
+  客户=量型 + 普通 + 询价50t:
+    主策略 = volume_driven_lowest
+    输出 QuoteOption[]:
+      [1] 推荐方案：50t 拆 30 武汉 + 20 襄阳
+          均价 ¥3,792  含倒短运费 ¥30/t  总价 ¥189,600
+          锁价 24h
+      [2] 标准方案：50t 武汉江夏倍尺
+          单价 ¥3,790  锁价 24h
+      [3] 优质方案：50t 武汉江夏标准品（库存 30+20）
+          均价 ¥3,820  锁价 24h
+          [建议销售跟进：客户偏低价时可不推荐]
+
+  若客户=利型 + 普通:
+    主策略 = profit_quality_first
+    输出：优先推 [3]，备选 [1]
+
+  若客户=新客 + 普通:
+    主策略 = new_customer_attractive
+    输出：推 [2]，并补"首单优惠 -¥10/t"，锁价 6h（短）
+          附话术：欢迎首单合作，本次为新客特批
+
+  若客户=黑名单（普通级别）:
+    主策略 = blacklist_uplift
+    输出：[3] 上浮 ¥80/t，注明"现款现货"，锁价 2h
+
+═══ 阶段 F：行为干预 (v6 软影响) ═════════════════════════════
+Soft Influence 检测到 ghost_score 0.62（询多买少）:
+  - 锁价时长降为 6h（默认 24h）
+  - 不展示阶梯优惠（不让客户拿着低价四处比）
+  - 附"销售小张稍后联系您"，标记 sales_followup=true
+  - 不在回执文字里抱怨；仅通过差异化让客户"感知到"
+
+═══ 阶段 G：MOQ 校验 ═══════════════════════════════════════
+品类 MOQ 表查：螺纹钢 MOQ = 30t
+本次 50t ≥ 30t → 正常报价
+若 < 30t → 标 unweighed_only = true，价格按"不过磅 ¥/支"
+
+═══ 阶段 H：档位执行 ═════════════════════════════════════════
+档位 = Assisted:
+  - Bot 把 QuoteOption[] 发给销售小张（企微 textcard）
+    «客户张总询价 INQ-001
+     画像：量型 普通 信用正常 ghost=0.62 ⚠️白嫖偏高
+     系统建议：方案 1 ¥3,792 均价（拆单），锁价 6h
+     [一键确认] [调整价格] [改方案] [转人工]»
+  - 销售 10s 内点"一键确认" → Bot 回客户
+  - 或销售调整后确认 → Bot 回客户
+
+档位 = Auto:
+  - 跳过销售，Bot 直接回客户
+  - 异步抄送销售（"已为白名单客户 XX 自动报价 ¥xxx"）
+
+档位 = Manual:
+  - Bot 不出价，仅创建工单 + 摘要给销售
+  - 销售全自助回价
+
+═══ 阶段 I：客户收到报价 ════════════════════════════════════
+（话术按客户画像差异化，见 6.4）
+
+═══ 阶段 J：转化追踪 ═══════════════════════════════════════
+报价后 24h / 7d / 30d 未成交 → 触发不同策略：
+  - 12h 未回应：销售自动收到"客户未回复"提醒
+  - 锁价过期：Bot 主动询问"价格已到期，是否需要重新报价"（限频）
+  - 持续 N 次报价未成交 → ghost_score↑，下次报价更短锁价 + 销售关怀
 ```
 
-**5.13.3 加载与缓存**
-
-- 启动时全量加载到 Redis（按 type 分 key）。
-- Aho-Corasick 自动机进程内常驻，热更新时重建。
-- 后台 UI 增删改 → 触发缓存重建（运营可维护）。
-
-**5.13.4 喂给 LLM 的 KB 上下文**
-
-为节省 token，不把整个 KB 喂给 LLM，而是**先用 Aho-Corasick 识别命中的实体，只把相关条目摘要进 prompt**。例：
+### 4.3 重复询价压制（v6 新增）
 
 ```
-[KB-Snippet]
-- 「螺四」= 螺纹钢 HRB400 (category/grade)
-- 「25」+ category=螺纹钢 → 规格 Φ25mm (spec)
-- 「沙钢」= 江苏沙钢 (origin)
+客户在 24h 内询同样规格的螺纹 HRB400 25mm 沙钢 50t：
+  - Bot 不重新走策略
+  - 直接引用上次 QuoteOption
+  - 话术："此规格 24h 内已为您报价 ¥3,792（剩余有效 4h）
+           如需续期请回复『续期』；如需新方案请回复『重新报价』"
+  - 销售可手动豁免（如行情大跳）
 ```
 
-### 5.14 Default Resolver（v5 新增核心模块）
+### 其他流程（4.1 同步查询 / 4.4~4.7）同 v5
+略。
 
-**5.14.1 优先级链**
+---
+
+## 5. 模块设计
+
+### 5.1~5.16 同 v5
+略。
+
+### 5.17 Customer Profile Engine（v6 新增核心）
+
+**5.17.1 属性体系**
+
+```yaml
+CustomerProfile:
+  identity:
+    customer_id, name, contact, region, salesperson_id
+  type:                    # 客户类型（自动 + 销售可覆盖）
+    primary: new | volume | profit | strategic | churn
+    confidence: 0.0~1.0
+    last_classified_at: timestamp
+    override: { by: sales_xxx, type: profit, reason: "..." }
+  list:                    # 名单
+    status: whitelist | normal | blacklist
+    blacklist_level: null | uplift | cash_only | prepay | refuse
+    expires_at: timestamp  # 黑名单可设有效期
+  credit:
+    status: normal | warning | frozen
+    limit: 5000000
+    used: 1234567
+  behavior:
+    inquiry_30d, inquiry_90d
+    quote_30d, quote_90d
+    deal_30d, deal_90d
+    conversion_rate_30d, conversion_rate_90d
+    avg_ton_per_order
+    dso_days
+    profit_margin_hist
+    categories_dominant: [螺纹钢, 中厚板]
+    ghost_score: 0.0~1.0   # 见 5.20
+    last_deal_at
+    seasonal_pattern: ...  # 选填
+```
+
+**5.17.2 自动分类规则（默认 + 可配）**
 
 ```
-对每个未明确给出的字段，按顺序找默认值：
-
-1. customer_pref           — 该客户历史 N 次询价里该字段众数
-2. customer_sales_pref     — 客户的对应销售常用的默认
-3. order_history_pref      — 该客户最近成交订单里的默认
-4. regional_default        — 客户所在地区的默认（如华东 12m, 华北也 12m）
-5. industry_default        — 行业惯例默认（如螺纹标准=GB/T 1499.2）
-
-任一命中即停止；都未命中 → missing
+new      ← 首次合作 < 90 天 AND 累计成交单数 < 3
+volume   ← 平均订单吨位 > P75 OR 月度采购量稳定且高
+profit   ← 历史毛利率 > P60 AND 平均订单吨位 < P75
+strategic← 销售或管理员手动标
+churn    ← 90 天无成交 AND 历史有成交
 ```
 
-**5.14.2 字段级策略矩阵**
+**5.17.3 更新频率**
 
-| 字段 | 是否自动推断 | 主要来源 | critical |
+- 实时事件驱动：下单/付款/逾期/询价 → 更新对应指标
+- 每小时跑一次轻量重分类
+- 每天跑一次全量重算
+- 销售在 Bot/CRM 里可手动改 type 或 list（带原因记录）
+
+**5.17.4 数据来源**
+
+- ERP / CRM（订单、应收、回款、客户档案）
+- Bot 自身（询价、转化、对话）
+- 销售手动标注
+
+### 5.18 Pricing Strategy Engine（v6 新增核心）
+
+**5.18.1 设计原则**
+
+- **规则可配置**：策略 = YAML/JSON 配置 + 价格基线（不硬编码）
+- **可解释**：每条 QuoteOption 必须能追溯到（基价 → 应用了哪些规则 → 最终价）
+- **多策略同时输出**：默认输出主策略 + 1~2 备选
+- **风险红线**：低于成本价的报价必须拦截 + 转销售（Bot 永不报赔本价）
+
+**5.18.2 策略库（节选）**
+
+```yaml
+strategies:
+
+  - name: new_customer_attractive
+    when:
+      profile.type: new
+      profile.list: [whitelist, normal]
+    actions:
+      - select_inventory: lowest_attribute_match
+      - discount: { fixed: -10, unit: "元/吨" }    # 首单优惠
+      - lock_minutes: 360                          # 短锁价 6h（避免被薅）
+      - reply_template: new_customer_welcome
+      - tag: "首单优惠"
+
+  - name: volume_driven_lowest
+    when:
+      profile.type: volume
+      profile.list: [whitelist, normal]
+    actions:
+      - select_inventory: best_blended_price       # 拼仓最低
+      - ladder:                                    # 量阶梯
+          - qty_gte: 100, discount: -20
+          - qty_gte: 200, discount: -35
+      - lock_minutes: 1440                         # 24h
+      - reply_template: volume_focus
+
+  - name: profit_quality_first
+    when:
+      profile.type: profit
+      profile.list: [whitelist, normal]
+    actions:
+      - select_inventory: best_quality
+      - markup_quality_premium: 10
+      - lock_minutes: 1440
+      - reply_template: quality_focus
+
+  - name: strategic_anchor
+    when: { profile.type: strategic }
+    actions:
+      - use_strategic_price_table: true
+      - lock_minutes: 4320                         # 72h
+      - reply_template: strategic_partner
+
+  - name: churn_callback
+    when:
+      profile.type: churn
+    actions:
+      - discount: { fixed: -30 }                   # 唤回价
+      - lock_minutes: 720                          # 12h
+      - reply_template: churn_callback
+      - trigger_sales_followup: true
+
+  - name: whitelist_discount
+    when: { profile.list: whitelist }
+    actions:
+      - discount: { fixed: -15 }                   # 白名单基础下浮
+      - lock_extend: 1.5                           # 锁价延长 50%
+
+  - name: blacklist_uplift
+    when: { profile.list: blacklist, profile.blacklist_level: uplift }
+    actions:
+      - markup: { rate: 0.03 }                     # 上浮 3%
+      - require: cash_only
+
+  - name: blacklist_cash_only
+    when: { profile.blacklist_level: cash_only }
+    actions:
+      - markup: { rate: 0.05 }
+      - reply_template: blacklist_cash_only
+
+  - name: blacklist_refuse
+    when: { profile.blacklist_level: refuse }
+    actions:
+      - block_quote: true
+      - reply_template: blacklist_refuse_polite
+      - escalate_to_human: true
+
+  - name: moq_unweighed
+    when: { qty_under_moq: true }
+    actions:
+      - pricing_mode: per_piece
+      - markup: { rate: 0.04 }                     # 不过磅成本高
+      - reply_template: moq_unweighed
+      - tag: "不过磅销售"
+
+  - name: no_qty_indicative
+    when: { qty_missing: true }
+    actions:
+      - quote_type: indicative
+      - lock_minutes: 60                           # 极短
+      - reply_template: indicative_only
+      - tag: "指导价"
+
+  - name: explorer_throttle
+    when: { profile.behavior.ghost_score_gte: 0.5 }
+    actions:
+      - lock_minutes_override: 360                 # 不给长锁价
+      - hide_ladder: true                          # 不暴露阶梯
+      - trigger_sales_followup: true
+      - reply_template: explorer_soft_hint
+
+  - name: repeat_inquiry_quote_reuse
+    when: { same_spec_in_24h: true }
+    actions:
+      - reuse_last_quote: true
+      - reply_template: repeat_inquiry_reuse
+```
+
+**5.18.3 策略合成**
+
+多条策略可叠加，但有优先级 + 互斥：
+- `blacklist_*` 一律最高优先级，且禁止与 `whitelist_*` 共存
+- `explorer_throttle` 可与其他策略叠加（覆盖锁价时长）
+- 类型策略（`new/volume/profit/...`）互斥，选最匹配一条
+- 量级策略（`moq_*` / `no_qty_*`）单独应用
+
+**5.18.4 成本红线**
+
+每个 QuoteOption 都要校验：`final_price >= cost_price * (1 + min_margin)`。
+不满足 → 不输出该方案 + 自动转销售人工。
+min_margin 在配置里按品类区分。
+
+### 5.19 Inventory Matcher（v6 新增）
+
+**5.19.1 多源库存**
+查询输入：(category, grade, spec, qty_demand, dest_city?)
+查询输出：候选库存数组（仓库、批次、库存量、属性、基价、距离/运费）
+
+**5.19.2 组合算法**
+
+| 模式 | 适用 |
+|---|---|
+| **单源最便宜** | 量小 / 客户偏低价 |
+| **多源拼单** | 量大 / 单仓不足 / 拼后更便宜 |
+| **品质优先** | profit 客户 |
+| **就近优先** | 客户偏交付速度 |
+
+输出多个 QuoteOption 时按"客户类型推荐顺序"排列：
+- volume → 最低价在前
+- profit → 优质品在前
+- new → 中等价位 + 标准品在前
+
+**5.19.3 含运费总成本**
+
+报价默认含到达指定目的地的运费（基于仓库距离表）。差异化展示：
+- "到武汉江夏含运 ¥3,820"
+- "或自提武汉江夏 ¥3,790（省 ¥30 运费）"
+
+### 5.20 Conversion Behavior Tracker（v6 新增）
+
+**5.20.1 漏斗指标**
+
+```
+INQUIRY → QUOTED → LOCKED → ORDERED → SHIPPED → PAID
+   |         |        |         |          |        |
+   v         v        v         v          v        v
+inquiry_cnt  quote_cnt lock_cnt deal_cnt   ship_cnt pay_cnt
+```
+
+按 7d / 30d / 90d 滚动统计。
+
+**5.20.2 关键派生指标**
+
+| 指标 | 公式 | 用途 |
+|---|---|---|
+| 询价转化率 | deal / inquiry | 客户健康度 |
+| 报价转化率 | deal / quote | 报价吸引力 |
+| 锁价转化率 | deal / lock | 锁完不下的占比 |
+| **Ghost Score** | 综合得分（见 5.20.3） | 白嫖判定 |
+| 平均决策时长 | deal_at - inquiry_at 均值 | 客户犹豫度 |
+| 询价波动度 | 月度询价次数的方差 | 客户稳定性 |
+
+**5.20.3 Ghost Score 计算**
+
+```
+ghost_score =
+  0.4 * (1 - conversion_rate_30d) +
+  0.2 * (重复询同规格不成交次数 / 总询价) +
+  0.2 * (锁价后未下单率) +
+  0.1 * (横向比价显著标识：如询价后 1h 内又问"对方报多少") +
+  0.1 * (与同类客户的平均水平相比)
+归一化到 0~1
+```
+
+阈值：
+- < 0.3：正常
+- 0.3~0.5：有点活跃比价
+- 0.5~0.7：偏白嫖（启动软干预）
+- ≥ 0.7：典型白嫖（销售强介入）
+
+**5.20.4 实时事件**
+每次状态变化（quoted/locked/expired/ordered/cancelled）打点 → Kafka/Redis Stream → 实时更新指标 + 触发对应策略。
+
+### 5.21 Soft Influence Module（v6 新增：行为干预 / 关系维护）
+
+> 这是处理"白嫖客户"的关键模块。**核心理念**：不抱怨、不指责、靠**差异化体验**让客户自己悟。
+
+**5.21.1 5 层渐进策略**
+
+| 层 | 触发 | 动作 | 客户体感 |
 |---|---|---|---|
-| category | 否 | — | 是 |
-| grade | 是（按品类） | industry_default | 否 |
-| spec | 否 | — | 是 |
-| origin | 是 | customer_pref → regional_default | 否 |
-| length | 是 | customer_pref → industry_default | 否 |
-| standard | 是 | industry_default | 否 |
-| qty | 否 | — | 是 |
-| qty_unit | 是（默认吨） | industry_default | 否 |
-| unit_weight | 是（计算） | unit_weight_table | 否 |
-| dest_city | **否** | — | **是**（高风险，错地址=错运费） |
-| delivery_date | 否 | — | 否（可空） |
+| **L1 隐性配额** | 24h 内同规格重复询价 | 引用上次报价 + 温和提示 | "原来一样的我刚问过" |
+| **L2 锁价缩短** | ghost_score ≥ 0.5 | 锁价从 24h → 6h | "怎么这次给的时间这么短" |
+| **L3 阶梯隐藏** | ghost_score ≥ 0.5 | 不展示量阶梯优惠 | "怎么没看到批量价" |
+| **L4 销售关怀** | ghost_score ≥ 0.6 OR 报价 5 次未成交 | 销售主动联系，话术：「最近为您报了几次，有什么顾虑可以聊聊」 | "原来销售这么关心我" + 微妙压力 |
+| **L5 策略降档** | ghost_score ≥ 0.7 | 从"利型/量型策略"降为标准价；不再给唤回优惠 | "这次报价怎么没那么有竞争力了" |
 
-> `dest_city` 即使客户偏好稳定也不自动填，必须客户每次确认（避免发错仓库的事故）。
+**5.21.2 配套话术（极简，绝不抱怨）**
 
-**5.14.3 客户偏好画像**
+| 场景 | 话术（差异化版本） |
+|---|---|
+| L1 重复询价 | "📌 此规格 24h 内已为您报价 ¥3,792，剩余有效 4h。如需新方案请回复『重新报价』；如需调整请回复『改条件 XX』" |
+| L4 销售关怀（销售视角脚本） | "张总最近询了几次咱们家的螺纹，是不是有些方案上还想再对比？我看看哪里能帮您再调整下" |
+| L5 沉默降档 | （不主动告知，靠回执差异让客户感知；如客户问"价格怎么涨了"→销售解释市场波动） |
 
-- 每次客户确认询价后更新：`customer_pref[field][value] += 1`。
-- 默认值来源 = 该字段最近 N 次（如 N=10）的众数。
-- 冷启动客户（历史 < 3 次）跳过 customer_pref，直接走 regional/industry。
-- 销售可以"覆盖"客户偏好：在销售端为客户设固定默认。
+**5.21.3 反向激励（让"勤下单客户"明显更爽）**
 
-**5.14.4 推断溯源**
+| 客户 | 体感差异 |
+|---|---|
+| 高转化客户 | 报价更快、锁价更长、阶梯更优、销售优先排队、可见"VIP 标识" |
+| Ghost 客户 | 上述全部反向 |
 
-每个被推断的字段必须落 `inquiry_inference_log`：
+**关键**：把"白嫖代价"和"忠诚红利"做成**可对比的体验差**，而不是"惩罚"。客户感受到的不是被指责，而是"原来勤下单的客户被这样对待"。
 
-```
-{
-  draft_id, item_no, field, inferred_value,
-  source: "customer_pref"|"regional_default"|...,
-  evidence: {hits: 11, samples_count: 12, ...},
-  customer_accepted: true|false,
-  customer_corrected_to: "..."  // 客户改了的话
-}
-```
+**5.21.4 客情防火墙**
 
-用于：
-- 评估默认值准确率
-- 事后追责（如果客户说"我没说这个"，调日志看推断来源）
-- 持续优化默认逻辑
+- L1~L3 全自动，话术不带任何指责字眼
+- L4 销售介入前，Bot 先告知销售客户画像 + 建议话术
+- L5 永远不向客户公开"ghost_score"或"你被降档了"
+- 销售可一键豁免任一层（带原因记录）
+- 客户连续 30 天活跃下单 → ghost_score 自动下降 + 恢复优待
 
-### 5.15 Tool Registry（v5 微调）
+### 5.22 Tool Registry（v6 更新）
 
 | 工具 | 入参变化 |
 |---|---|
-| `parse_inquiry` | 返回扩展的 InquiryDraft（含字段级 source 与 confidence） |
-| `submit_inquiry` | 入参的 InquiryItem 含明确的"客户已确认的最终值" |
-| 其他工具同 v4 | |
+| `parse_inquiry` | 同 v5 |
+| `submit_inquiry` | 同 v5 |
+| **`compose_quote`** *(v6 新增)* | inquiry_item, customer_id → 返回 QuoteOption[] + strategy_trace；仅在 Auto/Assisted 档位调用 |
+| **`confirm_quote`** *(v6 新增)* | option_id（销售确认 Assisted 报价；或客户回"确认"准备下单） |
+| `query_inquiry_status` | 同 v5 |
+| 其他工具 | 同 v5 |
 
-**InquiryItem v5 完整结构**：
+**QuoteOption v6 结构**：
 
 ```json
 {
-  "row_no": 1,
-  "fields": {
-    "category":     {"value":"螺纹钢", "source":"explicit",   "confidence":0.99},
-    "grade":        {"value":"HRB400", "source":"explicit",   "confidence":0.99},
-    "spec":         {"value":"Φ25mm",  "source":"explicit",   "confidence":0.93,
-                     "normalized_from":"25"},
-    "origin":       {"value":"江苏沙钢", "source":"explicit", "confidence":0.97,
-                     "normalized_from":"沙钢"},
-    "length":       {"value":"12m",    "source":"inferred_customer_pref",
-                     "confidence":0.85, "note":"按您历史习惯"},
-    "standard":     {"value":"GB/T 1499.2", "source":"industry_default",
-                     "confidence":0.95},
-    "qty":          {"value":50,       "source":"explicit",   "confidence":0.99},
-    "qty_unit":     {"value":"吨",     "source":"explicit",   "confidence":0.99},
-    "unit_weight":  {"value":3.85,     "unit":"kg/m",
-                     "source":"calculated", "confidence":1.0},
-    "total_weight": {"value":50,       "unit":"吨",
-                     "source":"calculated"},
-    "dest_city":    {"value":"武汉",   "source":"user_confirmed",
-                     "confidence":1.0},
-    "delivery_date":{"value":null,     "source":"missing", "optional":true},
-    "remark":       {"value":null,     "source":"missing", "optional":true}
-  },
-  "raw_excerpt": "要50吨螺四 25 沙钢的",
-  "overall_confidence": 0.93,
-  "critical_missing": [],
-  "user_confirmed_at": "2026-05-28T16:00:00Z"
+  "option_id": "OPT-...",
+  "inquiry_item_id": "...",
+  "label": "推荐方案 / 标准方案 / 优质方案",
+  "inventory_plan": [
+    {"warehouse":"武汉江夏", "qty":30, "base_price":3820, "attrs":"标准"},
+    {"warehouse":"襄阳",     "qty":20, "base_price":3750, "attrs":"长锈"}
+  ],
+  "freight_per_ton": 30,
+  "blended_unit_price": 3792,
+  "total_amount": 189600,
+  "lock_minutes": 360,
+  "lock_expires_at": "2026-05-28T22:00:00+08:00",
+  "strategy_trace": [
+    {"rule":"volume_driven_lowest", "effect":"select_inventory=best_blended_price"},
+    {"rule":"explorer_throttle",    "effect":"lock_minutes_override=360"}
+  ],
+  "tags": ["拼仓","含运","软干预-锁价缩短"],
+  "notes_to_customer": "...",
+  "notes_to_sales":    "客户 ghost=0.62 偏高，建议人工跟进",
+  "moq_ok": true,
+  "above_cost_redline": true,
+  "tier": "Assisted"
 }
 ```
 
-### 5.16 Reask Strategy（反问策略，v5 新增）
+### 5.23 Storage（v6 新增表）
 
-**只在 critical 字段缺失时反问**，其余字段用默认 + 回显让客户被动确认：
-
-| 缺失字段 | 反问话术 |
+| 表 | 用途 |
 |---|---|
-| category | "您要询哪种钢材？比如螺纹、板材、管材..." |
-| spec | "规格是多少？如 Φ25 / 14# / 108×4.5" |
-| qty | "数量是多少？比如 50 吨 / 100 根" |
-| dest_city | "送到哪个城市/仓库？" |
-
-**最多 2 轮反问**，再不齐转人工。避免对话陷入"机器人催问"。
-
-**批量场景**（Excel 50 行）：把所有 critical missing 集中表达，例如"以下 3 行规格不明确，请逐项补充：第 3 / 7 / 12 行"。
-
----
-
-## 6. 钢铁贸易话术与体验（v5 强化）
-
-### 6.1 回显模板
-统一来源标签：
-- ✏️ 您说的（explicit）
-- 🤖 默认推断（inferred）+ 简短说明（按您历史 / 行业默认 / 销售为您设的偏好）
-- 🧮 自动计算（calculated）
-- ✅ 您已确认（user_confirmed）
-- ❓ 待补充（missing critical）
-
-### 6.2 客户操作动词
-- 「确认」 / 「全部确认」 — 接受当前所有值
-- 「确认默认」 — 一键接受所有 🤖 推断
-- 「第3行 长度 9米」 — 字段级修正
-- 「都按沙钢」 — 批量修正
-- 「取消」 / 「重新发」 / 「转销售」
-
-### 6.3 销售视角
-工单卡片里展示：
-- 客户原话 + 解析结果差异（如果改过）
-- 每个字段的来源标签
-- 客户偏好画像快照（可帮销售判断异常）
-- 一键"按往常报价"/"覆盖客户默认"
+| `customer_profile` | 画像主表 |
+| `customer_profile_history` | 画像变更历史（含手动覆盖） |
+| `customer_blacklist` / `whitelist` | 名单 + 等级 + 失效时间 |
+| `pricing_strategy_config` | 策略规则（YAML/JSON） |
+| `pricing_strategy_version` | 策略版本与变更审计 |
+| `quote_option` | 生成过的报价方案 |
+| `strategy_trace` | 每次报价应用了哪些规则 + 数据 |
+| `inventory_snapshot` | 报价时点库存快照（争议追溯） |
+| `conversion_event` | 漏斗事件流 |
+| `ghost_score_history` | ghost 分数变化 |
+| `soft_influence_log` | 触发了哪层干预、客户后续行为 |
 
 ---
 
-## 7. 安全与合规
+## 6. 钢铁贸易话术与体验（v6 强化）
 
-同 v4。**v5 新增**：
-- `customer_preference` 表是商业敏感数据，加密 + 审计；销售只看自己 managed_customers 的偏好。
-- 知识库变更（运营改字典）→ 审计 + 通知开发评审。
-- 解析推断日志保留 1 年，用于纠纷追溯。
+### 6.1~6.3 同 v5
+略。
+
+### 6.4 客户分层话术模板（v6 新增）
+
+#### 新客（首次询价）
+```
+🎉 欢迎首次询价！本次为您提供新客特批：
+HRB400 螺纹钢 Φ25mm × 50t（沙钢，武汉到货）
+¥3,810/吨（含税含运，首单 -10）
+有效期 6 小时
+如需下单或调整方案，回复『继续』或联系销售小张：13xxxx
+```
+
+#### 量型客户
+```
+📊 您的询价方案：
+HRB400 螺纹钢 Φ25mm × 50t（武汉到货）
+推荐方案（拼仓）：均价 ¥3,792/吨  总价 ¥189,600
+量阶梯：≥100t 再优 ¥20/t；≥200t 再优 ¥35/t
+有效 24 小时
+回复『下单』或『调整数量』
+```
+
+#### 利型客户
+```
+✨ 为您匹配的优质方案：
+HRB400 螺纹钢 Φ25mm × 50t（武汉江夏 优级标准品）
+单价 ¥3,820/吨（含税含运）
+材质书 + 一炉一证 + 优质短锈
+有效 24 小时
+```
+
+#### 战略客户
+```
+🤝 战略合作专属价：
+HRB400 螺纹钢 Φ25mm × 50t
+¥3,775/吨（战略价表）
+锁价 72 小时
+如需备货请提前 24h 告知
+```
+
+#### 流失客户（唤回）
+```
+👋 好久不见，本次专为您匹配：
+HRB400 螺纹钢 Φ25mm × 50t
+¥3,762/吨（唤回价 -30）
+12 小时内有效
+销售小张稍后会联系您，看看是哪里没合作好
+```
+
+#### 黑名单（uplift）
+```
+您的询价方案：
+HRB400 螺纹钢 Φ25mm × 50t
+¥3,935/吨（现款现货）
+2 小时有效
+说明：因账期原因暂按现款，恢复正常后回到标准价
+```
+
+#### MOQ 不足（不过磅）
+```
+您的询价方案：
+HRB400 螺纹钢 Φ25mm × 20 支（不足过磅起订量 30t）
+¥920/支（按支销售，不过磅）
+有效 24 小时
+如凑齐 30t 起按吨过磅价 ¥3,820/吨
+```
+
+#### 纯询价（无量）
+```
+当前指导价（仅供参考）：
+HRB400 螺纹钢 Φ25mm（沙钢，武汉到货）
+约 ¥3,820/吨
+实际成交以您提供数量、目的地及提货时为准
+有效 1 小时
+```
+
+#### 重复询价（L1）
+```
+📌 此规格 24h 内已为您报价 ¥3,792/吨（剩余有效 4h）
+如需新方案：回复『重新报价』
+如需续期：回复『续期』（由销售审批）
+如需调整：回复『改条件 XX』
+```
+
+#### 软干预（L4 销售脚本，仅销售可见）
+```
+[系统建议销售话术]
+客户：张总（量型/普通/ghost=0.62）
+建议联系：今日 15:00 后
+切入：「张总最近询了几次咱家螺纹，是不是有方案上想再对比一下？
+       我看看是规格还是产地能再帮您调一调」
+不要说：「您一直询价没下单」「白嫖」
+```
 
 ---
 
-## 8. 可观测性
+## 7. 安全与合规（v6 增量）
 
-同 v4。**v5 新增**：
-- `inquiry_field_source{field,source}` — 各字段各来源占比
-- `inquiry_inference_accept_rate{field}` — 推断接受率
-- `inquiry_correction_total{field}` — 客户修正次数
-- `kb_hit_rate{type}` — KB 命中率
-- 周报：解析准确率 / 推断接受率 / Top 修正字段 → 反哺 KB 维护
+- **价格策略配置变更**全量审计 + 二人复核（避免改错策略导致赔本）。
+- **客户画像、ghost_score、soft_influence_log** 严禁泄漏给客户；销售看到的内容也要按角色权限可见。
+- 策略 trace 留存 1 年，纠纷追溯用。
+- 黑/白名单变更必须有原因 + 操作人 + 审批。
 
 ---
 
-## 9. 部署拓扑
+## 8. 可观测性（v6 增量）
 
-同 v4。**v5 新增**：
-- 知识库后台管理 UI（运营维护词典 / 默认规则 / 钢厂列表）。
-- 内置 KB 配置文件 + 数据库表双写，配置文件作为兜底。
+- 报价指标：
+  - `quote_total{tier}` (Auto/Assisted/Manual)
+  - `quote_strategy_applied{rule}`
+  - `quote_to_deal_rate{customer_type}`
+  - `quote_below_cost_blocked_total`（成本红线拦截）
+- 干预指标：
+  - `soft_influence_trigger{level}`
+  - `ghost_score_distribution`
+  - `repeat_inquiry_suppressed_total`
+- 销售视角：
+  - 一键确认率、平均确认时长、销售调整幅度
 
 ---
 
-## 10. 里程碑（v5 调整）
+## 9. 部署 / 10. 里程碑（增量）
+
+里程碑新增（追加到 v5）：
 
 | 里程碑 | 交付物 |
 |---|---|
-| M1~M7 | 同 v4 |
-| **M8 询价文字（v5 重点）** | KB 基础版（品类/材质/钢厂/规格正则/单重表） + LLM 抽取 + 默认推断 + 回显确认 + parse_log |
-| M9 询价图片 | VL 模型；图片询价表识别 |
-| M10 询价 Excel | openpyxl + LLM 列头映射；批量 SKU |
-| M11 询价 PDF | 文本 + 扫描双分支 |
-| **M11.5 客户偏好画像** | customer_preference 落库；推断准确率监控 |
-| M12 材质书文件下发 | |
-| M13 结算单 | |
-| M14 付款凭证 | |
-| M15 提醒发货 | |
-| M16 微信客服通道 | |
-| M17 DLP + 数据级权限完善 | |
-| M18 可观测 + 风控 + 对账 | |
-| **M19 KB 运营后台** | 词典/默认规则可视化维护 |
-| M20 灰度上线 | 内部销售 → 部分外部客户 → 全量 |
+| **M21 Customer Profile Engine** | 客户画像表 + 自动分类规则 + 销售手动覆盖 UI |
+| **M22 Conversion Tracker** | 漏斗事件流 + 关键指标 + Ghost Score |
+| **M23 Inventory Matcher** | 多源查询 + 组合优化 + MOQ 校验 + 运费 |
+| **M24 Pricing Strategy Engine** | 策略库 + 配置后台 + 成本红线 + 策略 trace |
+| **M25 三档协作 + Bot UI** | Auto/Assisted/Manual 判定 + 销售一键确认卡片 |
+| **M26 Soft Influence** | 5 层渐进式干预 + 差异化话术 + 反向激励 + 客情防火墙 |
+| **M27 报价话术模板** | 按客户分层的回执模板 + 销售脚本 |
+| **M28 策略灰度上线** | 先 Auto 仅小金额 + 白名单；逐步开 Assisted；全量 |
 
 ---
 
-## 11. 风险与对策（v5 更新）
+## 11. 风险与对策（v6 增量）
 
 | 风险 | 影响 | 对策 |
 |---|---|---|
-| **默认值推断错误，客户没注意就提交了** | 错单 | 所有 🤖 推断字段在回显里高亮；critical 字段不自动推断；客户每次都看到来源标签 |
-| **客户偏好画像冷启动** | 新客户体验差 | 用区域 + 行业默认兜底；前 5 次询价不写偏好库 |
-| **KB 词典维护滞后** | 新词识别不到 | 解析失败日志聚类 → 运营定期补词；客户修正回流 |
-| **同义词太多导致 LLM 误判** | 抽取错位 | KB 实体优先匹配 + 规则强约束；LLM 只在剩余字段上发挥 |
-| **规格歧义（"200" 是 H 钢规格还是数量）** | 错单 | 上下文 + 单位线索；不确定时反问 |
-| **旧标号客户（HRB335）** | 识别不到 | KB 含历史/淘汰牌号，标 deprecated 但仍可解析 |
-| **同一份询价跨多行 NLU 错位** | 串行 | 每行独立解析；交叉信息（地址/日期）允许全局共享 |
-| 多模态解析准确率不够 | 错单 | 强制回显 + 人工确认；置信度低转人工 |
-| Excel 表头千奇百怪 | 列映射错 | LLM 列头映射；客户专属模板（演进） |
-| VL 模型费用 | 成本 | 缓存 + 客户配额 |
-| LLM/VL 编造数字 | 商业事故 | 严禁出数字；后置 DLP |
-| 业务系统不能开发 Webhook | 异步流程走不通 | 过渡轮询 |
-| 微信客服 48h 窗口 | 推送失败 | 引导用户先发起 / SMS 退化 |
-| 客户机密外泄 LLM | 合规 | prompt 脱敏；如需要切私有化 |
-| 跨用户转发暴露敏感信息 | 合规 | DLP + 数据级权限 |
+| Auto 报价赔本 | 资损 | 成本红线必过 + 单笔金额上限 + 异常报价拦截器 |
+| 策略配置改错 | 大面积错价 | 二人复核 + 灰度发布 + 自动回滚 |
+| Ghost 误伤好客户 | 客情受损 | 评分阈值保守 + 销售可豁免 + 客户重新活跃后自动恢复 |
+| 客户察觉"被降档" | 客情危机 | 永远不公开评分；差异通过"市场行情"等中性话术解释 |
+| 黑名单滥用 | 销售个人偏好导致客户冤枉 | 黑名单分级 + 强制理由 + 上级审批 + 30 天复盘 |
+| 客户偏好与系统画像冲突 | 销售觉得系统不准 | 销售可手动覆盖；学习销售覆盖原因优化模型 |
+| 库存数据不实时 | 报价后无货 | 报价附库存快照 + 短锁价 + 自动补货机制 |
+| 同一客户多销售争抢 | 内部冲突 | 客户绑定销售 + 报价归属销售 + 销售调整审计 |
+| 重复询价压制过度 | 客户不耐烦 | 提供"重新报价"出口 + 限频参数可调 |
+| 阶梯优惠泄漏给非目标客户 | 价格穿帮 | 阶梯只在符合条件客户回显；公开渠道不暴露 |
+| 软干预触发频繁 | 客户疲劳 | 30 天冷却 + 每客户每周最多触发 N 次 |
 
 ---
 
 ## 12. 后续演进
-
-- **客户专属模板**：识别 Top 客户的固定 Excel 模板，跳过列头映射。
-- **LoRA 微调**：用 parse_log 真实语料微调 Qwen 7B/14B，做特定领域专用模型。
-- **报价 PDF 出件 → 客户回执 OCR 闭环**。
-- **主动智能**：账期/留货/价格变动提醒。
-- **销售 Copilot**：基于客户偏好画像 + 历史成交，推荐报价策略。
-- **多企业租户 KB 隔离**：每家公司自己的词典/默认偏好。
+- LLM Function Calling 加入 `propose_quote` 工具，让 LLM 在多轮里组织报价话术（但价格仍来自 Pricing Engine）。
+- 客户行为预测：用历史数据预测"客户下次下单概率"，提前推送优惠。
+- 销售业绩看板 + Bot 自动周报。
+- 报价多版本对比（A/B 不同策略）。
+- 行业行情联动：钢联/Mysteel 大盘动 → 自动调整基价。
+- LoRA 微调 + 客户专属模板。
 
 ---
 
 ## 13. 版本演进对比
 
-| 维度 | v1 | v2 | v3 | v4 | **v5** |
-|---|---|---|---|---|---|
-| 用户范围 | 通用 | 内外双 | 同 | 同 | 同 |
-| 意图识别 | 关键字 | LLM 双供应商 | 同 | + VL | 同 |
-| 多轮 | Redis | Topic/Task | 同 | 同 | 同 |
-| 绑定 | 草案 | 三方式 | 同 | 同 | 同 |
-| 业务 API | 假设 | ACL | + Webhook | 同 | 同 |
-| 行业能力 | 通用 | 假想 | 8 项实际 | 同 + 询价多模态 | 同 |
-| 询价输入 | 文字 | 文字 | 文字 | 文字/图/Excel/PDF | 同 |
-| 询价字段 | 5 | 5 | 5 | 7 | **9（+ 产地/长度/标准/单重）** |
-| **NLU 策略** | 关键字 | LLM | LLM | LLM | **KB + AC自动机 + LLM + 默认推断** |
-| **默认值** | — | — | — | — | **客户/销售/地区/行业 4 级默认 + 字段级溯源** |
-| **同义词处理** | — | — | — | — | **专门 KB 子库 + Aho-Corasick** |
-| **规格归一** | — | — | — | 基础 | **正则模板 + 品类分组** |
-| **理论单重** | — | — | — | — | **内置公式表 + 计算字段** |
-| **偏好画像** | — | — | — | — | **customer_preference + 销售可覆盖** |
-| **审计** | 基础 | 增强 | 同 | + 解析日志 | **+ 推断日志（含证据链）** |
+| 维度 | v3 | v4 | v5 | **v6** |
+|---|---|---|---|---|
+| 询价输入 | 文字 | 文字/图/Excel/PDF | 同 | 同 |
+| 询价字段 | 5 | 7 | 9 | 同 |
+| NLU 策略 | LLM | LLM | KB + 默认推断 + 字段级溯源 | 同 |
+| **报价** | **销售单干** | **销售单干** | **销售单干** | **三档协作（Auto/Assisted/Manual）** |
+| **客户画像** | — | — | 偏好画像（询价默认值） | **完整画像引擎（5 类型 + 名单 + 信用 + 行为 + Ghost）** |
+| **库存匹配** | — | — | — | **多源 + 组合优化 + 运费 + MOQ** |
+| **报价策略** | — | — | — | **可配置策略引擎（11+ 策略 + 成本红线）** |
+| **行为干预** | — | — | — | **5 层渐进式 + 差异化话术 + 反向激励** |
+| **MOQ / 不过磅** | — | — | — | **品类 MOQ 表 + per_piece 模式** |
+| **纯询价** | — | — | — | **指导价 + 极短锁价** |
+| **黑白名单** | — | — | — | **分级（上浮/现款/预付/拒报）** |
 
 ---
 
-## 14. 附录：钢铁贸易自然语言解析样例（v5）
+## 14. 附录：报价场景样例（v6 新增）
 
-| 客户原话 | 解析结果（关键字段） |
-|---|---|
-| "要50吨螺四 25 沙钢的" | 品类=螺纹钢，牌号=HRB400(✏️『螺四』)，规格=Φ25mm，产地=沙钢，数量=50t，长度=12m(🤖)，标准=GB/T 1499.2(🤖)，目的地=❓ |
-| "中板10个100吨" | 品类=中厚板，规格=10mm(✏️『10个』=厚度)，数量=100t，牌号=Q235B(🤖)，定尺=开平定尺(🤖)，目的地=❓ |
-| "工14三十吨" | 品类=工字钢，规格=14#(✏️『工14』)，数量=30t，牌号=Q235(🤖)，标准=GB(🤖)，长度=12m(🤖) |
-| "108的无缝 4.5壁厚 100根" | 品类=无缝管，规格=Φ108×4.5，数量=100根→需换算吨(单重 11.49 kg/m × 长度)，牌号=20#(🤖)，长度=❓ |
-| "弄点H钢200的 5吨" | 品类=H型钢，规格=HW200×200×8×12(🤖 200默认 HW 系列)，数量=5t，牌号=Q235B(🤖)，⚠️ 规格推断置信度 0.6，建议反问 |
-| "二级18 50吨 GB" | 品类=螺纹钢(🤖 二级18 暗示)，牌号=HRB335(✏️『二级』, deprecated 提示)，规格=Φ18mm，标准=GB/T 1499.2，数量=50t |
-| "螺纹 18 22 25 各50吨 沙钢12米送武汉" | **3 条 item**：螺纹钢/HRB400/Φ18/50t/沙钢/12m/武汉；Φ22/50t/...；Φ25/50t/... |
-| "要点6.0热卷沙钢的 50吨" | 品类=热轧卷，规格=6.0mm 厚(✏️『6.0』)，宽度=1500mm(🤖) / ❓，产地=沙钢，数量=50t，目的地=❓ |
-| "DN50 镀锌 100米" | 品类=镀锌管，规格=DN50(✏️)，长度=100米(数量字段)，需换算根数；标准=GB/T 3091(🤖)，材质=Q195/Q235(🤖) |
-| "304板2.0*1500*L 5吨" | 品类=不锈钢板，材质=304(✏️)，规格=2.0×1500，L=定尺(✏️)，数量=5t |
+| 场景 | 客户画像 | 输出策略 | 锁价 | 客户体感 |
+|---|---|---|---|---|
+| 新客首次询 50t 螺纹 | new + normal + ghost=0.1 | new_customer_attractive | 6h | 欢迎话术 + 首单 -10 |
+| 量型老客询 80t | volume + whitelist + ghost=0.2 | whitelist_discount + volume_driven_lowest | 24h*1.5=36h | 拼仓 + 阶梯优惠 + 长锁价 |
+| 利型客户询 30t | profit + normal + ghost=0.15 | profit_quality_first | 24h | 优质短锈 + 质保 + 中等价 |
+| 黑名单上浮级 | volume + blacklist(uplift) | blacklist_uplift | 2h | 上浮 3% + 现款 |
+| 流失客户回归询价 | churn + normal | churn_callback | 12h | 唤回价 -30 + 销售跟进 |
+| 频繁询价不下单 | volume + normal + ghost=0.65 | volume_driven_lowest + explorer_throttle | 6h（被覆盖） | 阶梯隐藏 + 短锁价 + 销售关怀 |
+| 同规格 24h 内重复 | 任意 + 命中 L1 | repeat_inquiry_quote_reuse | 复用 | "已为您报过" |
+| 询价 25t（MOQ 30t） | 任意 | moq_unweighed | 24h | 按支报价 |
+| 询价无数量 | 任意 | no_qty_indicative | 1h | 指导价 |
+| 超大单 600t | volume + whitelist + 大额触发 Manual | Manual | 销售决定 | "销售小张为您专项跟进" |
 
 ---
 
 ## 15. 待需求方确认
 
-1. **业务系统能否配合开发 Inbound Webhook**（quote.ready / settlement.created / payment.* / shipment.*）？
-2. **业务 API 是否支持以下操作**？
-   - 按客户+时间查留货订单
-   - 按客户查欠款汇总/明细
-   - **创建询价单（支持 v5 的 9 要素完整结构 + 批量）**
-   - 按订单/车牌查装车重量
-   - 按炉号/订单查材质书 PDF
-   - 按客户+月份查结算单 PDF
-   - 提交付款凭证（写）
-   - 提交发货催办（写）
-3. 询价 ERP 报价流：销售逐 item 报价还是整单？
-4. 报价回推是否需要同时附 PDF 报价单？
-5. **询价 9 要素中，业务 API 接收时哪些必填？哪些可空？**
-6. **客户偏好画像是 Bot 侧维护还是同步 CRM**？冲突时以谁为准？
-7. **运营是否需要 KB 维护后台**？谁来维护词典（销售运营 / 技术）？
-8. 付款凭证是否需要 OCR？OCR 服务选阿里 / 腾讯 / 自建？
-9. 多 sheet Excel 询价处理：默认询第一个 sheet？反问？
-10. 询价文件保留 1 年合规吗？
-11. VL 模型预算？
-12. 销售在 Bot 里 /reply 还是 ERP 里操作？
-13. 询价/催发货/付款核对 SLA 各是多少？
-14. 客户绑定方式：销售生成 token / 手机号短信 / 都要？
-15. 是否需要群聊场景？
+1. 业务系统能否开发 Inbound Webhook？
+2. 业务 API 是否支持创建询价（9 要素 + 批量）、查库存（多源/属性/库位）、提交报价方案？
+3. 询价 ERP 报价流：逐 item 还是整单？
+4. 报价回推是否附 PDF？
+5. 询价 9 要素 ERP 必填/可空？
+6. **客户画像主权归属：Bot 维护 vs 同步 CRM？冲突优先级？**（v6 关键）
+7. **价格策略配置后台：是否需要？谁来维护（运营/销售总监/老板）？**（v6 关键）
+8. **客户分类规则：是否需要按公司业务调整默认阈值（新客 90 天？P75 量？）**
+9. **品类 MOQ 表**：每个品类的最低过磅量是多少？
+10. **黑名单分级阈值**：上浮多少、什么情况进 cash_only、什么时候 refuse？
+11. **战略客户名单**由谁维护？变更审批流？
+12. **成本价数据源**：是否能实时从 ERP 拉？还是用每日快照？
+13. **Auto 档位金额上限**：单笔多少以下才能 Auto 直接报？
+14. **Ghost Score 阈值**和触发软干预的细则，需求方是否需要自己调？
+15. 付款凭证 OCR、多 sheet 策略、文件保留、VL 预算、SLA、客户绑定方式、群聊场景（同 v5）
