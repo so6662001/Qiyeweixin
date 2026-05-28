@@ -1,12 +1,13 @@
-# 企业微信机器人 — 设计文档（v11）
+# 企业微信机器人 — 设计文档（v12）
 
 > 状态：设计阶段（尚未开发）
 > 行业：**钢铁贸易**
 > 目标：搭建一个企业微信智能机器人，对接 8 项后端能力，覆盖内部员工和外部微信客户，接入 LLM（DeepSeek / 通义千问，含 VL 视觉模型）。
-> **v11 核心**：新增**替代料推荐能力**——客户询的规格无货/不足/即使有货但有更优替代时，主动推荐 7 类替代关系（同档异厂/异定尺/品质/向上向下/规格相近/国标外标等价）；客户知情决策；推荐时机三场景控制（完全有货默认不推、部分有货推拼方案、完全无货替代主推）；客户接受度三维度过滤（类型/历史/用途）。
-> **v10 核心**：统一转人工路由 + 销售竞争评分 + SLA-ACK 转派。
-> **v9 微调**：OCR/视觉统一通义千问 Qwen-VL。
-> **v8 核心**：报价生命周期状态机 + 改量五档决策。
+> **v12 核心**：①**品类+规格同时缺失**显式纳入转人工触发，统一进 Lead Routing。②**自我学习机制**——分三层：统计学习层（聚合事实数据）/ 规则决策层（人编规则 + 学到的参数）/ LLM 解释层（话术，绝不出数字）。坚持"**学事实不学决策、学参数不学规则、学的可追溯**"原则。配套 5 道幻觉防护栏（数字溯源/置信度门槛/冷启动保护/drift 监控/A/B 灰度）。
+> **v11 核心**：替代料推荐（7 类关系 + 3 场景时机 + 3 维接受度）。
+> **v10 核心**：统一转人工路由 + 销售竞争评分。
+> **v9**：OCR 统一 Qwen-VL。
+> **v8**：报价生命周期 + 改量。
 
 ---
 
@@ -30,6 +31,8 @@
 | **14（v9 新）** | **OCR / 视觉理解统一到通义千问** | **Qwen-VL 系列承接所有视觉任务**；移除 PaddleOCR / 阿里云 OCR / 腾讯云 OCR 等其他视觉服务；架构简化但需明确单供应商故障降级链 |
 | **15（v10 新）** | **无库存 / 未定价 → 自动转人工 + 销售选派规则**（绑定优先 / 团队池竞争抽签 / 优秀销售优先 / 不让马太效应） | **Lead Routing Engine + Sales Performance Score + Sales State Manager + SLA-ACK 超时转派 + 配额限制** |
 | **16（v11 新）** | **替代料推荐（提升竞争力）**：无货/不足/即使有货时主动推同档/异厂/异定尺/品质/向上向下/规格相近/国标外标等价的替代方案 | **Substitute Knowledge Base + Substitute Match Engine + Recommendation Strategy + 客户知情决策 + 用途场景识别 + 客户接受度过滤** |
+| **17（v12 新）** | **品类 + 规格同时缺失 → 自动转销售**（与"无库存""未定价"并列） | 显式作为 Lead Routing Engine 第 14 种触发场景；客户连续 2 轮反问都答不上来时升级 |
+| **18（v12 新）** | **系统自我学习，下次给出更合理价格；但绝不出 AI 幻觉** | **三层架构**：统计学习层 + 规则决策层 + LLM 解释层；**4 学 4 不学**原则；**5 道幻觉防护栏**（数字溯源/置信度门槛/冷启动保护/drift 监控/A/B 灰度）；学到的是参数，决策仍由规则；学的全程可追溯 |
 
 ---
 
@@ -161,6 +164,7 @@ Order-level Profit Optimizer 按 (客户类型 + 议价轮次 + 各项 headroom)
 | 询价解析失败 / 置信度低 | 多模态识别不清 | v4 |
 | Qwen-VL 故障 | 视觉服务降级失败 | v9 |
 | 软干预 L4 销售关怀 | ghost_score 高 | v6 |
+| **品类 + 规格同时缺失**（v12 新） | LLM 反问 2 轮后仍未补齐 | **v12** |
 
 **统一入口**：所有触发都进 Lead Routing Engine，由它决定转给谁。
 
@@ -271,6 +275,104 @@ substitute_preferences:
 
 ---
 
+### 1.10 自我学习机制 + 幻觉防护（v12 核心）
+
+#### 1.10.1 核心矛盾与三层分工
+
+| 极端 1：纯 LLM | 极端 2：纯硬编码 | **v12 三层架构** |
+|---|---|---|
+| 适应性强但会编数字（幻觉） | 不会编但学不到东西 | **学事实/规则做决策/LLM 只解释** |
+
+| 层 | 职责 | 输出 | 是否会"编" |
+|---|---|---|---|
+| **统计学习层** | 聚合事实数据 → 产出确定性指标（均值/中位数/众数/接受率/转化率） | 数字 + 样本数 + 置信度 + 时间窗 | **不会**（数学计算） |
+| **规则决策层** | 把学到的指标作为规则参数；规则本身仍是人编写 | 决策结果（用哪个策略、给什么默认值、报多少） | **不会**（按规则执行） |
+| **LLM 解释层** | 用学到的指标 + 规则输出 → 生成话术 | 自然语言文本 | **绝不出数字**（数字从结构化数据直接渲染） |
+
+#### 1.10.2 "4 学 / 4 不学" 原则
+
+**4 学**（事实层面，可统计）：
+
+| 学习对象 | 学到什么 | 用到哪 |
+|---|---|---|
+| 客户画像扩展 | 9 要素默认值众数、典型订单吨位、议价节奏、替代接受度、决策时长、时间偏好 | 报价默认值 + 锁价时长 + 推荐方案 |
+| 策略效果反馈 | 每条策略的转化率、Top counter-offer 组合接受率、ghost 触发后回归率 | 策略权重微调、Top-K 推荐 |
+| 行情/季节 | 月度品类需求波动、地区行情差异 | 库存调拨建议、报价基线 |
+| 销售经验沉淀 | 销售 override 原因聚类（如"这客户账期 30 天没问题"） | 反哺规则配置建议（人审才上线） |
+
+**4 不学**（决策层面，禁止学习改决策）：
+
+| 不学什么 | 原因 |
+|---|---|
+| **不学"该报多少钱"** | 价格只能从 cost + strategy rule + 库存合成，禁止"学习出来"以避免 LLM/ML 推测 |
+| **不学"该让多少"** | 让步幅度只能从让步预算和曲线生成 |
+| **不学"何时破红线"** | 成本红线、合规红线绝不可被学习覆盖 |
+| **不学黑/白名单 / 客户类型重分级** | 客户分级永远由人审 |
+
+#### 1.10.3 5 道幻觉防护栏
+
+| 防护 | 实现 |
+|---|---|
+| **数字溯源**（v5 实施 / v12 强化） | 每个数字字段必标 source（fact/calculated/inferred/missing）+ 证据（来自哪些样本/规则） |
+| **置信度门槛** | 学习指标 confidence < 阈值（默认 0.7）→ 不使用，回退默认 |
+| **冷启动保护** | 样本数 < N（默认 10）→ 不用学习结果，用全局/行业默认 |
+| **Drift 监控** | 关键指标变化幅度 > 阈值（默认 ±20%）→ 告警 + 暂停该指标的自动应用 + 人工 review |
+| **A/B 灰度** | 新学到的参数先在 5% 流量验证 → 7 天通过 → 20% → 全量；任何阶段异常即回滚 |
+
+#### 1.10.4 学习的反馈闭环
+
+```
+报价/议价/改量/推荐替代/转人工
+   ↓
+客户响应（接受/拒绝/砍价/沉默）
+   ↓
+事件落 conversion_event 表
+   ↓
+Customer Pattern Miner（统计层）
+  + Strategy Effectiveness Tracker（统计层）
+   ↓
+更新 customer_profile / strategy_config_params
+   ↓
+Drift Monitor 校验 → 通过 → 应用到规则
+   ↓
+下次报价时规则用更新后的参数
+```
+
+#### 1.10.5 学习数据的可追溯
+
+每次报价的回显里附"学习足迹"（只销售可见，客户不可见）：
+
+```
+本次默认值/策略来源：
+  ├ length=12m  ← 客户最近 8 次询价 7 次为 12m（confidence 0.88）
+  ├ 策略=volume_driven_lowest ← 客户类型量型（最近 30 天 12 单平均 80t）
+  ├ 锁价=24h ← 该客户决策中位数 22h（confidence 0.81）
+  ├ 推荐替代=永钢 HRB400 ← 客户接受同档异厂率 73%（最近 5 次）
+  └ 让步预算 ¥45/t ← 行业均值 + 客户类型修正
+```
+
+#### 1.10.6 不学习的硬保护
+
+```yaml
+hallucination_guard:
+  forbidden_learning_targets:
+    - quote_final_price        # 价格不学
+    - concession_step_value    # 让步幅度不学
+    - cost_redline             # 成本红线不学
+    - margin_floor             # 毛利底线不学
+    - customer_blacklist       # 名单不学
+    - customer_type_classification  # 客户类型分类不自动改（需人审）
+  
+  llm_output_constraints:
+    forbid_numbers_in_text: true              # LLM 文本不出价格/库存/订单号
+    numbers_must_come_from_structured: true   # 数字字段必从结构化方案渲染
+    post_dlp_scan: true                       # 后置 DLP 扫禁词
+    confidence_threshold_for_apply: 0.7
+    drift_alert_threshold: 0.2
+```
+
+---
+
 ## 2. 通道选型 / 3. 总体架构（v6 基础 + v7 新模块）
 
 ```
@@ -370,6 +472,38 @@ substitute_preferences:
       - 决定推什么：客户类型/历史/用途
       - 决定怎么推：明示替代关系 + 价格对比 + 接受度
       - 与议价引擎协同（议价中替代料作为让步货币）
+
+
+   ─────────── v12 新增自我学习模块 ───────────
+
+   ㉗ Customer Pattern Miner（客户行为模式挖掘 - 统计层）
+      - 聚合每位客户的历史询价/报价/议价/下单
+      - 产出确定性指标（众数/中位数/接受率/响应时长分布等）
+      - 滚动窗口（30/90/180 天）
+      - 写入 customer_profile（扩展 v5 customer_preference）
+
+   ㉘ Strategy Effectiveness Tracker（策略效果追踪 - 统计层，v6 扩展）
+      - 每条策略的转化率、让步组合接受率
+      - 替代料推荐接受率
+      - ghost_score 触发后客户回归率
+      - 销售 override 频率与原因
+      - 写入 strategy_config_params
+
+   ㉙ Self-tuning Parameter Engine（参数自调引擎 - 应用层）
+      - 把统计层的指标周期性应用到规则参数
+      - 服从 5 道幻觉防护栏：置信度 + 冷启动 + drift + A/B + 数字溯源
+      - 应用前必走灰度
+
+   ㉚ Drift Monitor（漂移监控）
+      - 关键指标变化幅度告警
+      - 暂停异常指标的自动应用
+      - 触发人工 review
+
+   ㉛ Hallucination Guard（幻觉防护层）
+      - LLM 输出强制 DLP 数字扫描
+      - 数字字段必从结构化方案渲染
+      - 不学习目标的硬白名单（cost_redline / blacklist / etc）
+      - 学习结果应用前 confidence 校验
 
 
 
@@ -886,9 +1020,131 @@ Bot 发客户（明示替代关系）：
 
 ═══ 阶段 10：合同/审计 ════════════════════════════════════════
 客户确认 → 生成订单
-合同条款里**单独标注替代关系**："本订单含替代料：永钢 HRB400 Φ25 替代沙钢 HRB400 Φ25，
-                              客户已知情并同意，两者均为国标 HRB400 同档替代"
-交付时双方签收清单留档；事后投诉时有据可查
+- 交付时双方签收清单留档
+- 事后争议时翻 `substitute_decision_log` 查证据链
+```
+
+### 4.13 自我学习闭环流程（v12 新增）
+
+```
+═══ 阶段 0：事件发生 ═══════════════════════════════════════════
+报价 → 客户响应 → 议价 → 让步 → 接受/拒绝 → 改量 → 下单/放弃 → 推荐替代 → 接受/拒绝
+        ↓
+全部落 conversion_event 表（结构化事件流）
+带 event_id / timestamp / customer_id / quote_id /
+   negotiation_round / amendment_round / substitute_decision /
+   strategy_applied / counter_offer_used / final_outcome
+
+═══ 阶段 1：统计层聚合（异步）══════════════════════════════════
+每小时增量 + 每天全量跑：
+
+  Customer Pattern Miner:
+    对每客户/每字段统计:
+      - length: {12m: 7, 9m: 1}  → 众数 12m，confidence 0.88
+      - origin: {沙钢: 5, 永钢: 3} → 众数 沙钢，confidence 0.625
+      - 议价轮次中位数: 2.5
+      - 决策时长: P50=22h
+      - 替代接受率: 同档异厂 0.73 / 异定尺 0.40
+  
+  Strategy Effectiveness Tracker:
+    对每策略/每客户类型统计:
+      - new_customer_attractive: 转化率 0.42
+      - volume_driven_lowest: 转化率 0.61
+      - explorer_throttle: 干预后回归率 0.28
+      - counter_offer "let_price+lock_extend": 接受率 0.55
+
+═══ 阶段 2：Drift Monitor 校验 ══════════════════════════════════
+对比新指标 vs 上次：
+  变化幅度 ≤ ±10% → 正常应用
+  变化幅度 10~20% → 告警 + 仍应用
+  变化幅度 > 20%  → 暂停自动应用 + 人工 review
+  样本数下降 50% → 异常告警（可能数据流故障）
+
+═══ 阶段 3：Self-tuning Parameter Engine 应用 ═══════════════════
+通过 drift 检查的指标 → 进入应用流：
+
+  冷启动保护：样本数 < 10 → 不应用
+  置信度门槛：confidence < 0.7 → 不应用，保留全局默认
+  
+  通过的指标进入 A/B 灰度：
+    新参数：5% 流量
+    7 天后：转化率/客户满意度无下降 → 升 20%
+    7 天后：仍正常 → 100%
+    任何阶段异常 → 自动回滚
+
+═══ 阶段 4：应用到规则 ════════════════════════════════════════
+规则使用更新后的参数（不改规则逻辑）：
+
+  Default Resolver:
+    customer.length 默认 12m (confidence 0.88, source customer_pref)
+  
+  Concession Strategy:
+    profit_seeker 曲线初始让步比例 0.5 → 实际可能为 0.48
+    （基于历史接受率微调）
+  
+  Substitute Strategy:
+    客户接受度门槛 0.5 → 0.55
+    （基于该客户接受历史调整）
+  
+  Pricing Strategy:
+    锁价 24h → 23h
+    （基于该客户决策中位数 22h）
+
+═══ 阶段 5：报价生成时使用 ═══════════════════════════════════════
+新报价生成 → 调用规则 + 学到的参数 → 出方案
+   ↓
+每个字段都带"学习足迹"（销售可见）：
+  length=12m ← 客户最近 8 次询价 7 次为 12m (confidence 0.88)
+  策略=volume_driven_lowest ← 客户类型量型（最近 30 天 12 单平均 80t）
+  锁价=23h ← 该客户决策中位数 22h (confidence 0.81)
+  推荐替代=永钢 HRB400 ← 客户接受同档异厂率 73% (最近 5 次)
+  让步预算 ¥45/t ← 行业均值 + 客户类型修正
+
+═══ 阶段 6：LLM 解释层 ════════════════════════════════════════
+LLM 用上述参数生成话术，但：
+  - LLM 接收的 prompt 含具体数字（用于上下文理解）
+  - LLM 输出的话术里**数字位置用占位符**
+  - 占位符在输出后用结构化数字替换
+  例：
+    LLM 输出：「为您锁价 {{LOCK_HOURS}} 小时」
+    渲染后：「为您锁价 23 小时」
+  - 后置 DLP 扫描：若 LLM 输出含未占位符的数字 → 拒绝该话术
+  - 不出现"AI 推测"的报价
+
+═══ 阶段 7：客户响应 → 回到阶段 0 ════════════════════════════
+客户的接受/拒绝/砍价 → 落 conversion_event → 下次循环更新
+
+═══ 阶段 8：审计 ═══════════════════════════════════════════════
+每次报价的"学习足迹"完整审计到 learning_trace 表
+争议时可查"这个默认值是从哪些样本学来的"
+```
+
+### 4.14 品类 + 规格同时缺失的处理（v12 新增 / 衔接 v10 Lead Routing）
+
+```
+parse_inquiry 解析结果：category=null AND spec=null
+   ↓
+不进入 Substitute Recommendation / Pricing 流程
+不调用 Customer Pattern Miner（无关键字段无法定位品种）
+   ↓
+LLM 友好反问 1：
+  "您要询哪种钢材？比如螺纹、板材、管材、卷板..."
+  "或者发个图/Excel/PDF 也可以哦～"
+
+═══ 客户答非所问 / 没说品种 / 只说量 / 只说价 ════════════════
+LLM 反问 2：
+  "请告诉我具体品种 + 规格哈～
+   例如：『螺纹 HRB400 Φ25 50 吨送武汉』
+   或：『中板 Q235B 12mm 100 吨』"
+
+═══ 仍然无法识别 → 转销售 ═══════════════════════════════════
+进入 Lead Routing Engine
+  trigger_type = NO_CATEGORY_NO_SPEC
+  urgency = NORMAL
+  conversation_excerpt = 最近 5 条客户消息
+  hint = "客户连续 2 轮未提供关键品种/规格信息，可能是新手客户或网络不畅，建议人工电话联系确认"
+   ↓
+按 v10 路由规则分派销售
 ```
 
 ---
@@ -1713,6 +1969,241 @@ def should_recommend(stock_status, customer, in_negotiation, in_amendment):
 | `recommend_substitutes` | inquiry_item, customer_id, use_case? | 调 Match + Strategy，返回 Top-3 候选 |
 | `record_substitute_decision` | recommendation_id, action: accept/reject, chosen_substitute? | 落库 + 更新偏好 |
 
+### 5.40 Customer Pattern Miner（客户行为模式挖掘 - v12 新增）
+
+**5.40.1 输入与输出**
+```
+Input: conversation_event 表的滚动窗口（30/90/180 天）
+Output: customer_profile 扩展字段
+```
+
+**5.40.2 挖掘的指标**
+
+```yaml
+CustomerLearnedProfile:
+  default_values_distribution:
+    length:   {12m: 7, 9m: 1}  # 30 天 8 次询价的统计
+    origin:   {沙钢: 5, 永钢: 3}
+    grade:    {HRB400: 8}
+    standard: {GB: 8}
+  default_modes:               # 众数
+    length: {value: "12m", confidence: 0.88, sample_size: 8}
+    origin: {value: "沙钢", confidence: 0.625, sample_size: 8}
+  typical_order:
+    qty_p50: 80
+    qty_p90: 150
+    monthly_orders: 4.2
+  negotiation_pattern:
+    avg_rounds: 2.5
+    accept_after_concession_pct: {round1: 0.3, round2: 0.5, round3: 0.7}
+    cited_competitor_credibility: 0.4  # 历史虚价比例
+  decision_time:
+    p50_hours: 22
+    p90_hours: 60
+  substitute_acceptance:
+    同档异厂: 0.73
+    同档异定尺: 0.40
+    向下兼容: 0.0  # 历史从未接受
+  time_pattern:
+    inquiry_peak_hour: 14    # 多在下午询
+    avg_response_minutes: 5
+  channel:
+    primary: wecom_kf
+    secondary: phone
+```
+
+**5.40.3 关键计算原则**
+- 滚动窗口：默认 30 天，可配
+- 样本数 < 10 → 不输出（冷启动）
+- 每个指标都标 confidence + sample_size + last_updated
+- 计算资源：异步批处理（不阻塞实时报价）
+
+**5.40.4 应用**
+- Default Resolver 优先用 customer learned defaults
+- Concession Strategy 微调让步幅度（接受率高的客户可少让）
+- Lock duration 用客户决策中位数
+- Substitute Strategy 用客户接受率
+
+### 5.41 Strategy Effectiveness Tracker（策略效果追踪 - v12 扩展 v6）
+
+**5.41.1 跟踪维度**
+
+```yaml
+strategy_metrics:
+  per_strategy:
+    new_customer_attractive:
+      conversion_rate: 0.42
+      avg_concession_used: 8       # 让步使用幅度
+      avg_decision_time: 18h
+      customer_type_breakdown: {new: 0.42, ...}
+    volume_driven_lowest:
+      conversion_rate: 0.61
+      ...
+  per_counter_offer:
+    "let_price+lock_extend":
+      accept_rate: 0.55
+      next_round_concession_required: 0.30
+    "保价+换替代":
+      accept_rate: 0.48
+  per_substitute_relation:
+    同档异厂:
+      accept_rate: 0.68
+      profit_margin_change_avg: +5
+  per_soft_influence:
+    L4_sales_followup:
+      回归率: 0.28      # ghost 客户回到正常采购的比例
+      avg_recovery_days: 12
+```
+
+**5.41.2 输出 → 影响**
+
+- Pricing Engine 策略推荐顺序：转化率高的策略被推荐先
+- Counter-offer Generator Top-K：接受率高的组合优先
+- Substitute Recommendation：接受率高的关系类型优先
+- Soft Influence：回归率低的干预层被人工 review
+
+### 5.42 Self-tuning Parameter Engine（参数自调引擎 - v12 新增）
+
+**5.42.1 调参范围（白名单）**
+
+只允许调以下参数，其他参数不可自动调：
+
+```yaml
+self_tunable_params:
+  default_values:
+    customer.{field}.default   # 各客户的默认值
+  lock_minutes:
+    by_customer_decision_time   # 按客户决策中位数
+  concession_curve:
+    fine_tune_ratio: ±0.05     # 让步比例微调
+  substitute_threshold:
+    customer.acceptance_score   # 客户接受度门槛
+  T_routing:
+    auto_adjust_per_team        # 销售路由温度参数
+forbidden_params:
+  - cost_redline
+  - margin_floor
+  - blacklist_uplift_rate
+  - blacklist_classification
+  - customer_type_classification
+```
+
+**5.42.2 应用条件（5 道门槛逐一通过）**
+
+```
+1. 数据质量门槛  ← 样本数 ≥ 10 AND 数据完整性 ≥ 95%
+2. 置信度门槛   ← confidence ≥ 0.7
+3. Drift 校验   ← 变化幅度 ≤ ±20%
+4. A/B 灰度    ← 5% → 20% → 100%
+5. 数字溯源    ← 每次应用必落 trace
+```
+
+任何一道未通过 → 不应用（保留人工默认）
+
+**5.42.3 应用频率**
+
+- 实时事件：仅更新统计指标，**不立即应用到规则**
+- 日批：通过 drift 检查的指标进入 A/B 候选
+- 周批：A/B 验证通过的进入下一档灰度
+- 月度：完成全量灰度的参数固化到主版本
+
+### 5.43 Drift Monitor（漂移监控 - v12 新增）
+
+**5.43.1 监控指标**
+
+```yaml
+drift_alerts:
+  customer_pattern:
+    threshold_pct: 20            # 变化超 20% 告警
+    metrics: [default_modes, negotiation_pattern, decision_time]
+  strategy_effectiveness:
+    threshold_pct: 15
+    metrics: [conversion_rate, accept_rate]
+  data_quality:
+    sample_size_drop_pct: 50    # 样本量骤降告警
+    completeness_drop_pct: 10
+```
+
+**5.43.2 告警动作**
+
+| 级别 | 触发 | 动作 |
+|---|---|---|
+| WARN | 变化 ±10~20% | Slack/邮件 告警 + 继续应用 |
+| HIGH | 变化 ±20~40% | **暂停该指标自动应用** + 人工 review |
+| CRITICAL | 变化 ±40%+ / 数据流故障 | **全量暂停学习** + 触发应急 + 主管介入 |
+
+**5.43.3 数据健康监控**
+
+- conversion_event 表 lag 检测
+- 客户档案同步与 CRM 一致性
+- 策略 trace 完整性
+- 学习指标的统计分布
+
+### 5.44 Hallucination Guard（幻觉防护层 - v12 新增）
+
+**5.44.1 LLM 输出三道扫描**
+
+```
+Step 1 - 占位符强制：
+  LLM 必须用 {{PLACEHOLDER}} 表示所有数字
+  例：「为您锁价 {{LOCK_HOURS}} 小时」
+       不接受：「为您锁价 23 小时」（即使数字正确）
+
+Step 2 - 后置 DLP 数字扫描：
+  扫描 LLM 输出文本：
+    - 含未占位符的纯数字 → REJECT
+    - 含未占位符的钱币符号 → REJECT
+    - 含未占位符的吨数/根数 → REJECT
+    - 含禁词（成本/老板/亏本/底价/批价等）→ REJECT
+  
+Step 3 - 占位符渲染：
+  把 {{PLACEHOLDER}} 替换为来自结构化方案的实际数字
+  方案数据来源 = Pricing Engine / Concession Strategy / Inventory Matcher
+  绝不是 LLM 编造
+```
+
+**5.44.2 学习层硬白名单防护**
+
+```python
+def can_learn(target_param):
+    if target_param in FORBIDDEN_LEARNING_TARGETS:
+        return False
+    if target_param.startswith("cost_") or target_param.startswith("redline_"):
+        return False
+    return True
+
+FORBIDDEN_LEARNING_TARGETS = [
+    "quote_final_price",
+    "concession_step_value",
+    "cost_redline",
+    "margin_floor",
+    "customer_blacklist",
+    "customer_type_classification",
+    "blacklist_uplift_rate",
+    "auto_quote_amount_limit"  # Auto 档位上限不允许学习自动调
+]
+```
+
+**5.44.3 应用前置审计**
+
+每次 Self-tuning Parameter Engine 应用前：
+- 检查 target_param 是否在白名单
+- 检查 5 道门槛通过
+- 落 parameter_application_log 审计
+
+### 5.45 Storage（v12 新增表）
+
+| 表 | 用途 |
+|---|---|
+| `customer_learned_profile` | 客户行为模式挖掘结果 |
+| `strategy_effectiveness_metric` | 策略效果指标 |
+| `parameter_tuning_history` | 参数自调历史 |
+| `parameter_application_log` | 应用审计 |
+| `learning_trace` | 每次报价的学习足迹 |
+| `drift_alert_log` | 漂移告警 |
+| `ab_experiment` | A/B 灰度实验 |
+| `forbidden_learning_targets` | 不学习目标白名单（运营维护） |
+
 ---
 
 ## 6. 钢铁贸易话术与体验（v7 增量）
@@ -2048,6 +2539,59 @@ SLA：5 分钟 ACK，30 分钟回客户
 [继续提交订单] [让客户再确认一次]
 ```
 
+### 6.9 品类+规格全空话术 & 学习足迹（v12 新增）
+
+#### 品类+规格全空 - LLM 反问 1
+```
+您好～我看到您要询价，能告诉我具体品种和规格吗？
+比如：螺纹 / 板材 / 管材 / 卷板…
+或者直接发个图/Excel/PDF 也可以哦～
+```
+
+#### 品类+规格全空 - LLM 反问 2
+```
+请告诉我具体品种 + 规格哈～
+例如：『螺纹 HRB400 Φ25 50 吨送武汉』
+或：『中板 Q235B 12mm 100 吨』
+我帮您快速匹配最优方案
+```
+
+#### 反问 2 轮仍无果 - 转人工
+```
+看您方便用文字描述吗？
+或者我让销售小张电话联系您，您说一下需求他帮您整理
+小张 5 分钟内联系您～
+```
+
+#### 销售收到品类+规格全空的转单
+```
+[textcard]
+客户：张总（微信客服 / 普通 / 新客 / 入驻 2 周）
+触发：品类 + 规格全空（连续 2 轮未提供）
+原话："要点货发我"
+"急用 50 吨"
+"价格便宜点"
+建议：可能新手客户，建议电话或视频指导询价
+SLA：5 分钟 ACK，15 分钟回客户
+```
+
+#### 学习足迹（销售可见，客户不可见）
+```
+📊 本次报价学习足迹（仅销售可见）
+  ├ 默认 length=12m 来源: 客户最近 8 次询价中 7 次 12m
+  │  confidence 0.88, sample 8, source customer_pattern_miner
+  ├ 默认 origin=沙钢 来源: 客户最近 8 次询价中 5 次沙钢
+  │  confidence 0.625, sample 8（置信度偏低，可以反问）
+  ├ 策略=volume_driven_lowest 来源: 客户类型量型 + 平均订单 80t
+  │  历史此策略对该客户转化率 0.65
+  ├ 锁价 23h 来源: 客户决策中位数 22h
+  │  confidence 0.81, sample 12
+  ├ 推荐替代=永钢 HRB400 来源: 同档异厂接受率 0.73
+  │  历史 5 次接受 4 次
+  └ 让步预算 ¥45/t 来源: 行业均值 + 客户类型修正
+     (cost_redline 永不学习，硬保护)
+```
+
 ---
 
 ## 7. 安全与合规（v7 增量）
@@ -2091,6 +2635,9 @@ SLA：5 分钟 ACK，30 分钟回客户
 | **M35 改量能力（v8）** | Quote 生命周期状态机（版本化）+ Amendment Engine + 四档决策 + 改量话术 + 频次防护 + 锁后改量审批工单 |
 | **M36 Lead Routing + Sales Score（v10）** | Lead Routing Engine + Sales Performance Score + Sales State Manager + SLA-ACK 转派 + 团队 leaderboard + 抽签温度参数后台 |
 | **M37 替代料推荐（v11）** | Substitute KB 基础数据 + Match Engine + Strategy Engine + 客户偏好画像扩展 + 替代话术 + 合同/审计 + 议价让步货币集成（第 9 维） + 后台运营 UI（KB 维护） |
+| **M38 自我学习基础（v12）** | conversion_event 表 + Customer Pattern Miner + Strategy Effectiveness Tracker + 学习足迹审计 |
+| **M39 参数自调 + Drift（v12）** | Self-tuning Parameter Engine + 5 道防护栏 + Drift Monitor + A/B 实验框架 + 不学习目标白名单 |
+| **M40 幻觉防护层（v12）** | LLM 占位符强制 + 后置 DLP 数字扫描 + 渲染管道 + 应用前置审计；同时收口品类+规格全空走转人工 |
 
 ---
 
@@ -2133,6 +2680,15 @@ SLA：5 分钟 ACK，30 分钟回客户
 | **替代推荐砸自己原品价格**（v11） | 老客户感觉被宰 | FULL_STOCK 时默认不主动推；战略客户主动推也仅作"信任建立"非"降价" |
 | **客户接受度画像冷启动**（v11） | 新客户体验不准 | 用客户类型 + 用途场景兜底；首次推保守模式 |
 | **同档异厂规格细微差异**（v11） | 客户加工设备不适配 | 规则中记录"加工差异提示"；推荐时 caveat 字段透出 |
+| **学习指标被恶意/异常样本污染**（v12） | 学到错的默认/接受率 | 异常事件检测（如单次大单异常吨位）+ 中位数优于均值 + Drift Monitor |
+| **学习滞后 / 行情大变指标失效**（v12） | 老数据误导新报价 | 短窗口（7 天）+ 长窗口（90 天）双轨；行情突变时自动切换短窗 + 告警 |
+| **LLM 输出绕过占位符直出数字**（v12） | 幻觉数字进客户消息 | 后置 DLP 强制扫描；任何未占位数字一律 REJECT；触发 prompt 注入告警 |
+| **学习层与决策层耦合过深**（v12） | 学习一改决策跟着乱 | 三层严格分离；学习层输出只读；规则层不能直接调统计 API |
+| **数据库雪崩 conversion_event 不写入**（v12） | 学习停滞 | 落库写双链路（DB + Kafka 兜底）+ 异步重放 |
+| **客户类型自动重分类引入连锁错误**（v12） | 大批客户被改类型 | 客户类型自动调被列入"不学习"白名单；调类型必须人审 |
+| **A/B 灰度数据偏样**（v12） | 灰度的 5% 流量恰好是某类客户 | 分层抽样 + 至少跑 7 天 + 关键转化率显著性检验 |
+| **学习足迹泄漏给客户**（v12） | 客户看到内部置信度 | 学习足迹仅销售可见；DLP 出口扫描"learning_trace"等关键字 |
+| **品类+规格全空被反复反问**（v12） | 客户烦躁 | 最多 2 轮反问 → 立即转人工 |
 | **OCR 单供应商风险**（v9） | 通义千问限流/故障时所有视觉能力受影响 | 企业级 SLA 配额；Qwen-VL-Max → Plus 内部降级；解析失败转人工 + 告警；演进项预留 DeepSeek-VL 应急备选 |
 | **Qwen-VL OCR 对非标准票据/手写识别下降**（v9） | 付款凭证关联订单错位 | 规则正则二次校验金额/卡号末四位；不唯一时反问客户；财务最终人工确认才落账 |
 | **DashScope 计费失控**（v9） | 视觉 token 量大费用飙升 | 文件 hash 缓存（同图不重复识别）；按客户 / 日 配额；图片预先压缩到合理分辨率；非询价/付款凭证场景一律不走 VL |
@@ -2152,38 +2708,43 @@ SLA：5 分钟 ACK，30 分钟回客户
 
 ## 13. 版本演进对比
 
-| 维度 | v3 | v4 | v5 | v6 | v7 | v8 | v9 | v10 | **v11** |
-|---|---|---|---|---|---|---|---|---|---|
-| 询价输入 | 文字 | 文字/图/Excel/PDF | 同 | 同 | 同 | 同 | 同 | 同 | 同 |
-| 询价字段 | 5 | 7 | 9 | 同 | 同 | 同 | 同 | 同 | 同 |
-| NLU 策略 | LLM | LLM | KB+默认+溯源 | 同 | 同 | 同 | 同 | 同 | 同 |
-| 报价 | 销售单干 | 同 | 同 | 三档协作 | 同 | 同 | 同 | 同 | 同 |
-| 客户画像 | — | — | 偏好 | 完整画像 | 同 | 同 | 同 | 同 | 同 |
-| 库存匹配 | — | — | — | 多源组合 | 同 | 同 | 同 | 同 | 同 |
-| 报价策略 | — | — | — | 11 策略 | 同 | 同 | 同 | 同 | 同 |
-| 行为干预 | — | — | — | 5 层 | 同 | 同 | 同 | 同 | 同 |
-| **议价** | — | — | — | — | 多轮状态机 + 让步曲线 | 同 | 同 | 同 | 同 |
-| **让步货币** | — | — | — | — | 8 维（价/量/时/运/期/质/赠/组） | 同 | 同 | 同 | 同 |
-| **整单优化** | — | — | — | — | 跨项让步分配 + 整单底线 | 同 + 整单改量校验 | 同 | 同 | 同 |
-| **议价 LLM** | — | — | — | — | 带预算的议价话术 + 情绪检测 | 同 | 同 | 同 | 同 |
-| **议价审计** | — | — | — | — | 全轮 offer + 销售决策落库 | 同 | 同 | 同 | 同 |
-| **报价生命周期**（v8 新） | — | — | — | — | — | **DRAFT/ACTIVE/AMENDING/LOCKED/EXPIRED/SUPERSEDED + 版本化** | 同 | 同 | 同 |
-| **改量决策**（v8 新） | — | — | — | — | — | **AUTO / ASSISTED / CUSTOMER_CHOICE / MANUAL / REJECT 五档** | 同 | 同 | 同 |
-| **跌穿 MOQ**（v8 新） | — | — | — | — | — | **客户选项卡片** | 同 | 同 | 同 |
-| **锁后改量**（v8 新） | — | — | — | — | — | **必走审批工单** | 同 | 同 | 同 |
-| **改量频次防护**（v8 新） | — | — | — | — | — | **每 Quote / Session / 日多级阈值** | 同 | 同 | 同 |
-| **视觉 OCR 供应商**（v9 新） | — | — | — | — | — | — | **统一通义千问 Qwen-VL（移除 PaddleOCR / 阿里 / 腾讯 OCR）** | 同 | 同 |
-| **DashScope 集成**（v9 新） | — | — | — | — | — | — | **企业 SLA + 配额 + 子账号 + 计费监控** | 同 | 同 |
-| **转人工触发统一**（v10 新） | — | — | — | — | — | — | — | **13 种触发归 Lead Routing Engine** | 同 |
-| **销售路由两层**（v10 新） | — | — | — | — | — | — | — | **绑定优先 + 团队池加权抽签** | 同 |
-| **销售评分**（v10 新） | — | — | — | — | — | — | — | **7 维综合 + 团队 leaderboard + 周期更新** | 同 |
-| **SLA + ACK**（v10 新） | — | — | — | — | — | — | — | **5min ACK / 30min 回客户 / 60min 主管升级** | 同 |
-| **抽签温度 T**（v10 新） | — | — | — | — | — | — | — | **可后台调节 精英 vs 公平** | 同 |
-| **配额限制**（v10 新） | — | — | — | — | — | — | — | **每销售每日新单配额 + 新人保底 10%** | 同 |
-| **替代料推荐**（v11 新） | — | — | — | — | — | — | — | — | **7 类关系 + 3 场景时机 + 3 维客户接受度** |
-| **替代料 KB**（v11 新） | — | — | — | — | — | — | — | — | **同档/向上下/相近/外标等价规则集 + 后台维护** |
-| **让步货币第 9 维**（v11 新） | — | — | — | — | — | — | — | — | **substitute 作为议价让步货币** |
-| **替代料合同**（v11 新） | — | — | — | — | — | — | — | — | **单独条款 + 客户明确确认 + 签收清单审计** |
+| 维度 | v3 | v4 | v5 | v6 | v7 | v8 | v9 | v10 | v11 | **v12** |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 询价输入 | 文字 | 文字/图/Excel/PDF | 同 | 同 | 同 | 同 | 同 | 同 | 同 | 同 |
+| 询价字段 | 5 | 7 | 9 | 同 | 同 | 同 | 同 | 同 | 同 | 同 |
+| NLU 策略 | LLM | LLM | KB+默认+溯源 | 同 | 同 | 同 | 同 | 同 | 同 | 同 |
+| 报价 | 销售单干 | 同 | 同 | 三档协作 | 同 | 同 | 同 | 同 | 同 | 同 |
+| 客户画像 | — | — | 偏好 | 完整画像 | 同 | 同 | 同 | 同 | 同 | 同 |
+| 库存匹配 | — | — | — | 多源组合 | 同 | 同 | 同 | 同 | 同 | 同 |
+| 报价策略 | — | — | — | 11 策略 | 同 | 同 | 同 | 同 | 同 | 同 |
+| 行为干预 | — | — | — | 5 层 | 同 | 同 | 同 | 同 | 同 | 同 |
+| **议价** | — | — | — | — | 多轮状态机 + 让步曲线 | 同 | 同 | 同 | 同 | 同 |
+| **让步货币** | — | — | — | — | 8 维（价/量/时/运/期/质/赠/组） | 同 | 同 | 同 | 同 | 同 |
+| **整单优化** | — | — | — | — | 跨项让步分配 + 整单底线 | 同 + 整单改量校验 | 同 | 同 | 同 | 同 |
+| **议价 LLM** | — | — | — | — | 带预算的议价话术 + 情绪检测 | 同 | 同 | 同 | 同 | 同 |
+| **议价审计** | — | — | — | — | 全轮 offer + 销售决策落库 | 同 | 同 | 同 | 同 | 同 |
+| **报价生命周期**（v8 新） | — | — | — | — | — | **DRAFT/ACTIVE/AMENDING/LOCKED/EXPIRED/SUPERSEDED + 版本化** | 同 | 同 | 同 | 同 |
+| **改量决策**（v8 新） | — | — | — | — | — | **AUTO / ASSISTED / CUSTOMER_CHOICE / MANUAL / REJECT 五档** | 同 | 同 | 同 | 同 |
+| **跌穿 MOQ**（v8 新） | — | — | — | — | — | **客户选项卡片** | 同 | 同 | 同 | 同 |
+| **锁后改量**（v8 新） | — | — | — | — | — | **必走审批工单** | 同 | 同 | 同 | 同 |
+| **改量频次防护**（v8 新） | — | — | — | — | — | **每 Quote / Session / 日多级阈值** | 同 | 同 | 同 | 同 |
+| **视觉 OCR 供应商**（v9 新） | — | — | — | — | — | — | **统一通义千问 Qwen-VL（移除 PaddleOCR / 阿里 / 腾讯 OCR）** | 同 | 同 | 同 |
+| **DashScope 集成**（v9 新） | — | — | — | — | — | — | **企业 SLA + 配额 + 子账号 + 计费监控** | 同 | 同 | 同 |
+| **转人工触发统一**（v10 新） | — | — | — | — | — | — | — | **13 种触发归 Lead Routing Engine** | 同 | 同 |
+| **销售路由两层**（v10 新） | — | — | — | — | — | — | — | **绑定优先 + 团队池加权抽签** | 同 | 同 |
+| **销售评分**（v10 新） | — | — | — | — | — | — | — | **7 维综合 + 团队 leaderboard + 周期更新** | 同 | 同 |
+| **SLA + ACK**（v10 新） | — | — | — | — | — | — | — | **5min ACK / 30min 回客户 / 60min 主管升级** | 同 | 同 |
+| **抽签温度 T**（v10 新） | — | — | — | — | — | — | — | **可后台调节 精英 vs 公平** | 同 | 同 |
+| **配额限制**（v10 新） | — | — | — | — | — | — | — | **每销售每日新单配额 + 新人保底 10%** | 同 | 同 |
+| **替代料推荐**（v11 新） | — | — | — | — | — | — | — | — | **7 类关系 + 3 场景时机 + 3 维客户接受度** | 同 |
+| **替代料 KB**（v11 新） | — | — | — | — | — | — | — | — | **同档/向上下/相近/外标等价规则集 + 后台维护** | 同 |
+| **让步货币第 9 维**（v11 新） | — | — | — | — | — | — | — | — | **substitute 作为议价让步货币** | 同 |
+| **替代料合同**（v11 新） | — | — | — | — | — | — | — | — | **单独条款 + 客户明确确认 + 签收清单审计** | 同 |
+| **品类+规格全空转人工**（v12 新） | — | — | — | — | — | — | — | — | — | **2 轮反问后转人工** |
+| **自我学习**（v12 新） | — | — | — | — | — | — | — | — | — | **统计层 + 决策层 + LLM 解释层 三层架构** |
+| **学习的 4 学 4 不学**（v12 新） | — | — | — | — | — | — | — | — | — | **学事实/规则做决策/学的可追溯** |
+| **5 道幻觉防护**（v12 新） | — | — | — | — | — | — | — | — | — | **数字溯源/置信度/冷启动/drift/AB 灰度** |
+| **LLM 占位符强制**（v12 新） | — | — | — | — | — | — | — | — | — | **数字必从结构化方案渲染，绝不 LLM 编造** |
 
 ---
 
@@ -2330,4 +2891,18 @@ v11 新增（替代料推荐相关）：
 53. **替代料推荐是否需要工程方"现场签字"才能交付**？
 54. **替代料 KB 维护后台**谁来维护？销售总监 / 技术部 / 业务部？多久 review 一次？
 
-继续保留 v3~v10 已有的问题（共 54 个累积）。
+v12 新增（自我学习 + 品类规格全空相关）：
+
+55. **学习窗口长度**：默认 30 天滚动，公司业务波动周期适合吗？是否要做 7 天短窗 + 90 天长窗双轨？
+56. **置信度门槛**默认 0.7，应用学习结果。是否符合业务？
+57. **冷启动样本数**默认 10。新客户什么时候才允许走学习路径？
+58. **Drift 阈值**：±20% 告警 / ±40% 全量停学；公司风险偏好？
+59. **A/B 灰度比例**：5%→20%→100%；7 天周期是否足够？业务方倾向更快/更稳？
+60. **学习足迹是否对销售完全透明**？还是只给主管看？
+61. **不学习目标白名单**：还需要添加哪些？（默认 cost_redline / margin_floor / blacklist / 客户类型分类 / Auto 上限）
+62. **LLM 占位符强制是否会影响话术自然度**？需要业务方 review 一批生成示例确认
+63. **客户类型自动重分类**：v6/v12 都默认禁止；业务方是否希望保留"建议销售考虑改类型"的功能？
+64. **学习指标对销售个人透明吗**？销售能看到客户的接受率/决策时长等画像吗？
+65. **品类+规格全空反问**默认 2 轮，业务方意见？
+
+继续保留 v3~v11 已有的问题（共 65 个累积）。
