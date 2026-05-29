@@ -1,8 +1,15 @@
-# 企业微信机器人 — 设计文档（v14）
+# 企业微信机器人 — 设计文档（v15）
 
 > 状态：设计阶段（尚未开发）
 > 行业：**钢铁贸易**
 > 目标：搭建一个企业微信智能机器人，对接 8 项后端能力，覆盖内部员工和外部微信客户，接入 LLM（DeepSeek / 通义千问，含 VL 视觉模型）。
+> **v15 核心**（剩余 15 个早期问题确认引出的关键架构变化）：
+> ① **自建能力层 Self-built Capability Layer**：4 个能力业务 ERP 不支持，由本系统自建数据模型+存储+逻辑（创建询价单 / 材质书 PDF 生成管理 / 付款凭证 / 发货催办）；
+> ② **计费与配额 Billing & Quota**：文件超期保留收费、Qwen-VL 按套餐配额、SaaS 套餐体系；
+> ③ **交互式报价编辑 Interactive Quote Editor**：报价回推附 PDF + 客户/销售可逐行快速修改（卡片/H5 编辑）；
+> ④ **品类要素必填配置**：9 要素必填/可空按品类配置；
+> ⑤ 报价流双模式（整单提交 + 逐行展示）；多 sheet 反问；销售在 Bot 内 /reply；绑定方式 token + 短信都支持；**确认不做群聊**。
+> 
 > **v14 核心**（本次大批量需求确认引出的 8 个架构变化）：
 > ① **Configuration Center**（企业配置中心）：承载本次确认的 25+ 个可配置项，按企业（多租户）+ 类型管理；
 > ② **客户细分**：Customer Profile 新增 segment（下级经销商 / 终端企业），整单毛利底线按 segment 差异（默认 ¥10/吨 vs ¥200/吨）；
@@ -47,6 +54,11 @@
 | **25（v14 新）** | **销售级别（junior/mid/senior）+ 入职时间衰减保底** | Sales Profile 扩展 level 字段；配额差异化；新人保底概率按 onboarding_months 衰减 |
 | **26（v14 新）** | **学习参数收紧** | 冷启动 10 → 60；7 天短窗 + 90 天长窗双轨；A/B 灰度 30 天/期；学习足迹仅主管可见 |
 | **27（v14 新）** | **可机器报价 SKU 白名单** | 未在白名单的规格直接转销售（v10 "未定价" 触发的实现机制） |
+| **28（v15 新）** | **4 个能力 ERP 不支持 → 本系统自建** | Self-built Capability Layer：创建询价单 / 材质书 PDF 生成管理 / 付款凭证 / 发货催办（自有数据模型 + 存储 + 业务逻辑，不依赖 ERP） |
+| **29（v15 新）** | **SaaS 计费与配额** | 文件超期保留收费 + Qwen-VL 按套餐配额 + 套餐体系；超额限流/提示升级 |
+| **30（v15 新）** | **交互式报价编辑** | 报价附 PDF + 客户/销售逐行快速修改（卡片按钮 / H5 编辑页），追求方便快捷直观 |
+| **31（v15 新）** | **品类要素必填配置** | 询价 9 要素的必填/可空按品类配置（不同品类要素不同） |
+| **32（v15 新）** | 报价流双模式（整单提交 + 逐行展示）；多 sheet 反问；销售 Bot 内 /reply；绑定 token+短信都支持；**不做群聊** | 各对应模块微调 |
 
 ---
 
@@ -610,6 +622,55 @@ StockSnapshot:
 
 ---
 
+### 1.14 剩余 15 个早期问题确认（v15）
+
+#### 1.14.1 决策清单
+
+| # | 问题 | 决策 | 落地 |
+|---|---|---|---|
+| 1 | 业务系统能否配合开发 Inbound Webhook | **可以配合开发** | 5.10 Inbound Webhook 确定可用 |
+| 2 | 业务 API 支持哪些操作 | 见下表 1.14.2，**4 个不支持→本系统自建** | 5.60 自建能力层 |
+| 3 | ERP 报价流：逐 item 还是整单 | **两模式都支持**；整单提交但**逐行展示**（方便快捷直观） | 5.61 + 4.2 |
+| 4 | 报价是否附 PDF + 客户如何快速修改 | **附 PDF**；客户/销售**逐行交互式快速修改**（卡片/H5） | 5.61 交互式报价编辑 |
+| 5 | 9 要素必填/可空 | **按品类配置**（不同品类要素不同） | 5.62 + 配置中心 |
+| 6 | 客户偏好画像 Bot vs CRM | **可配置二选一**（v10 已确认） | 5.53 |
+| 7 | KB 维护后台谁维护 | **业务部**（v11 已确认） | 5.36 |
+| 8 | 多 sheet Excel 处理 | **反问客户** | 5.12 Inquiry Parser |
+| 9 | 询价文件保留期 | **默认 1 年**；更长**收费** | 5.63 计费配额 |
+| 10 | VL 模型预算 | **收费项 + 按购买套餐配额** | 5.63 计费配额 |
+| 11 | 销售 Bot /reply vs ERP | **Bot 内 /reply** | 4.11 / 5.33 |
+| 12 | SLA | 5min ACK + 20min 回客户（v10 已确认） | 5.33 |
+| 13 | 客户绑定方式 | **token + 手机号短信 都支持** | 5.6 Identity & Binding |
+| 14 | 群聊场景 | **不需要**（移除群聊设计） | 全局 |
+| 15 | LLM 占位符话术 review | 开发期任务，需求方提供 review 样例标准 | M40 |
+
+#### 1.14.2 业务 API 支持矩阵（v15 关键）
+
+| 能力 | ERP 支持 | 处理方式 |
+|---|---|---|
+| 按客户+时间查留货订单 | ✅ | ACL 适配调 ERP |
+| 按客户查欠款汇总/明细 | ✅ | ACL 适配调 ERP |
+| 按订单/车牌查装车重量 | ✅ | ACL 适配调 ERP |
+| 按客户+月份查结算单 PDF | ✅ | ACL 适配调 ERP |
+| **创建询价单（9 要素 + 批量）** | ❌ | **本系统自建**（5.60） |
+| **材质书 PDF（按炉号/订单）** | ❌ | **本系统自建**（生成 + 管理） |
+| **提交付款凭证（写）** | ❌ | **本系统自建** |
+| **提交发货催办（写）** | ❌ | **本系统自建** |
+
+> 这意味着 Bot 不只是"ERP 前台"，还要承载 4 个 ERP 没有的业务能力，需要自有数据库表 + 业务流程 + 与 ERP 的数据同步/对账。
+
+#### 1.14.3 v15 引出的架构变化
+
+| 架构变化 | 影响 |
+|---|---|
+| **Self-built Capability Layer**（5.60） | 4 个自建能力的数据模型/存储/逻辑/与 ERP 同步 |
+| **Interactive Quote Editor**（5.61） | 报价 PDF + 逐行交互式快速修改体验 |
+| **品类要素必填配置**（5.62） | Inquiry Parser + 配置中心扩展 |
+| **Billing & Quota**（5.63） | SaaS 套餐 + 文件保留计费 + VL 配额 |
+| **移除群聊**（全局） | Channel Adapter 简化；仅一对一私聊 |
+
+---
+
 ## 2. 通道选型 / 3. 总体架构（v6 基础 + v7 新模块）
 
 ```
@@ -808,6 +869,27 @@ StockSnapshot:
       - SKU 维度白名单（品类 + 牌号 + 规格组合）
       - 不在白名单的规格 → "未定价"路径（v10）→ 转销售
       - 销售可定期 review + 提报新增/移除
+
+   ─────────── v15 新增自建能力 / 计费 / 交互模块 ───────────
+
+   ㊷ Self-built Capability Layer（自建能力层 - v15 核心）
+      - 创建询价单（9 要素 + 批量；ERP 无此能力）
+      - 材质书 PDF 生成与管理（按炉号/订单；ERP 无）
+      - 付款凭证管理（接收 + 审核 + 转财务；ERP 无）
+      - 发货催办（工单 + 通知销售；ERP 无）
+      - 各自有数据模型 + 与 ERP 双向同步/对账
+
+   ㊸ Interactive Quote Editor（交互式报价编辑 - v15）
+      - 报价回推附 PDF 报价单
+      - 客户/销售逐行快速修改（卡片按钮 + H5 编辑页）
+      - 整单提交 + 逐行展示双模式
+      - 修改即时重算（联动 Pricing / Inventory / Optimizer）
+
+   ㊹ Billing & Quota（计费与配额 - v15）
+      - SaaS 套餐体系（基础/标准/高级/旗舰）
+      - Qwen-VL 调用按套餐配额（超额限流 + 提示升级）
+      - 文件保留：默认 1 年；超期收费
+      - 用量计量 + 账单 + 配额告警
 
 
 ---
@@ -3277,6 +3359,261 @@ parse_inquiry 抽取 sku → 查 whitelist:
 | `customer_type_suggestion` | 系统给销售的客户类型建议 |
 | `ghost_score_amend_to_zero` | 改到 0 的客户行为记录（影响下次询价待遇） |
 
+### 5.60 Self-built Capability Layer（自建能力层 - v15 核心）
+
+> 4 个能力 ERP 不支持，由本系统自建。这部分不是"调 ERP"，而是 Bot 系统的**自有业务子系统**。
+
+**5.60.1 创建询价单（Inquiry Order）**
+
+ERP 无询价单概念，Bot 自建：
+
+```yaml
+InquiryOrder:
+  inquiry_id, customer_id, sales_id, created_at, channel
+  items: [InquiryItem × N]    # v5 的 9 要素结构
+  status: DRAFT | SUBMITTED | QUOTING | QUOTED | CLOSED
+  source: text | image | excel | pdf
+  attachments: [原始文件 OSS 引用]
+  quote_refs: [Quote × N]
+```
+
+- 支持批量（一份 Excel N 行 → N 个 item）
+- 与 ERP 关系：询价单是 Bot 侧的"前置单据"；客户下单转单时才在 ERP 创建正式订单
+- 报价完成（销售在 Bot 报价）后 → quote.ready 不需要 ERP webhook（因为询价在 Bot 侧）
+- 但若 ERP 也要看询价数据 → Bot 反向推送 ERP（可选）
+
+**5.60.2 材质书 PDF 生成与管理（Material Cert）**
+
+ERP 无材质书电子化，Bot 自建：
+
+```yaml
+MaterialCert:
+  cert_id, batch_no（炉批号）, order_id?, customer_id
+  source: generated（Bot 按模板生成）| uploaded（上传扫描件）
+  pdf_oss_url, generated_at
+  fields: { 牌号, 规格, 炉号, 化学成分, 力学性能, 标准号, ... }
+```
+
+- 两种来源：① 按模板 + ERP/质检数据生成 PDF；② 人工上传扫描件
+- 客户索要 → 查 cert → Media Pipeline 发送
+- 与 ERP 关系：化学成分/力学性能数据从 ERP 或质检系统拉（若有）；否则人工录入
+
+**5.60.3 付款凭证管理（Payment Voucher）**
+
+ERP 无凭证接收，Bot 自建（v3 已设计 Media Pipeline 入站，v15 明确为自建）：
+
+```yaml
+PaymentVoucher:
+  voucher_id, customer_id, order_ids[], amount, paid_at
+  oss_url, ocr_result（Qwen-VL）
+  status: PENDING_VERIFY | VERIFIED | REJECTED
+  verified_by（财务）, verified_at
+```
+
+- 客户上传 → OSS + Qwen-VL OCR → 关联订单 → 财务审核工单
+- 与 ERP 关系：财务确认后，Bot 把核销信息**写回 ERP**（若 ERP 有应收核销 API）或人工录入
+
+**5.60.4 发货催办（Shipment Urge）**
+
+ERP 无催办单，Bot 自建（v3 工单基础上明确）：
+
+```yaml
+ShipmentUrge:
+  urge_id, order_id, customer_id, sales_id
+  message, status: OPEN | ACKED | RESOLVED
+  sla, created_at, resolved_at
+```
+
+- 客户催 → 创建催办工单 → 通知销售 → 销售 Bot 内 /reply
+- 与 ERP 关系：查订单发货状态从 ERP 读；催办本身是 Bot 侧工单
+
+**5.60.5 自建能力与 ERP 的数据同步原则**
+
+| 数据流向 | 机制 |
+|---|---|
+| ERP → Bot（读） | ACL 调 ERP API（订单/库存/欠款/装车重量/结算单） |
+| Bot → ERP（写回） | 转正式订单 / 付款核销 → 调 ERP 写 API 或人工 |
+| Bot 自有数据 | 询价单 / 材质书 / 付款凭证 / 催办工单（Bot 数据库） |
+| 对账 | 每日 Bot 自有单据与 ERP 订单对账，发现遗漏告警 |
+
+### 5.61 Interactive Quote Editor（交互式报价编辑 - v15）
+
+**5.61.1 报价回推（含 PDF）**
+
+```
+报价生成 → 三种形式同时回推：
+  1. 微信消息内 Markdown 表格（逐行展示，直观）
+  2. PDF 报价单（正式，可转发/存档）
+  3. 交互式编辑入口（卡片按钮 或 H5 链接）
+```
+
+**5.61.2 整单 + 逐行展示双模式**
+
+```
+整单报价（销售一次报完）但展示逐行：
+┌─────────────────────────────────────
+│ 报价单 Q-001（共 5 行，总价 ¥958,000）
+├─ 1. 螺纹 HRB400 Φ25 沙钢 50t  ¥3,820  [改]
+├─ 2. 螺纹 HRB400 Φ22 沙钢 30t  ¥3,810  [改]
+├─ 3. 中板 Q235B 12mm 100t     ¥4,050  [改]
+├─ 4. 工字钢 14# 20t           ¥4,200  [改]
+├─ 5. 角钢 ∠50×5 10t          ¥4,100  [改]
+├─────────────────────────────────────
+│ [全部接受] [下载 PDF] [整单议价] [逐行改]
+└─────────────────────────────────────
+```
+
+**5.61.3 客户快速修改（追求方便快捷）**
+
+| 修改方式 | 实现 |
+|---|---|
+| 点某行 [改] | 弹卡片：改数量 / 删除该行 / 单独议价 |
+| 文字快捷 | "第 3 行改 80 吨" / "删除第 5 行" / "1 和 2 行各加 20t" |
+| H5 编辑页 | 复杂多行修改 → H5 表格批量编辑 → 提交即重算 |
+| 语音 | 客户发语音 → Qwen 转写 → 解析修改意图 |
+
+**5.61.4 修改即时重算联动**
+
+```
+客户改第 3 行数量 100t → 80t
+   ↓
+Interactive Quote Editor:
+  - 调 Pricing Engine 重算第 3 行（量阶梯可能变）
+  - 调 Inventory Matcher 重新匹配库存
+  - 调 Order Optimizer 重算整单毛利（校验 segment 底线）
+  - 走 Amendment Engine 决策（v8/v14：AUTO/ASSISTED/...）
+   ↓
+生成 Quote 新版本（v8 版本化）
+   ↓
+回推更新后的逐行展示 + 新 PDF
+```
+
+**5.61.5 PDF 报价单**
+
+- 模板化（含公司抬头 / 客户信息 / 逐行明细 / 总价 / 有效期 / 条款）
+- 出站 Media Pipeline 发送
+- 每个 Quote 版本一份 PDF（版本号水印）
+- 客户改完重新生成
+
+### 5.62 品类要素必填配置（v15）
+
+**5.62.1 按品类配置必填/可空**
+
+```yaml
+category_field_requirements:
+  螺纹钢:
+    required: [category, grade, spec, qty, dest_city]
+    optional: [origin, length, standard, delivery_date]
+    # length/standard 有默认（12m / GB），可空走默认
+  中厚板:
+    required: [category, grade, spec(厚度), qty, dest_city]
+    optional: [origin, length(定尺), standard, surface]
+  无缝管:
+    required: [category, grade, spec(外径×壁厚), qty, dest_city]
+    optional: [origin, length, standard]
+  不锈钢:
+    required: [category, grade(必须明确如304/316L), spec, qty, dest_city]
+    optional: [origin, surface, edge]
+```
+
+**5.62.2 与 Inquiry Parser / Default Resolver 协同**
+
+- 解析后按品类查必填项
+- 必填项缺失 → critical_missing → 反问（v5）
+- 可空项缺失 → 走 Default Resolver 默认推断（v5）
+- 配置在 Configuration Center（企业可调）
+
+**5.62.3 与转人工协同**
+
+- required 中 `category` + `spec` 同时缺失 → v12 品类规格全空转人工
+- 其余 required 缺失 → 反问 2 轮 → 补不齐转人工
+
+### 5.63 Billing & Quota（计费与配额 - v15）
+
+**5.63.1 SaaS 套餐体系**
+
+```yaml
+plans:
+  basic:
+    monthly_fee: ...
+    vl_calls_per_month: 1000
+    file_retention_months: 12
+    seats: 5
+  standard:
+    vl_calls_per_month: 5000
+    file_retention_months: 12
+    seats: 20
+  premium:
+    vl_calls_per_month: 20000
+    file_retention_months: 24
+    seats: 50
+  enterprise:
+    vl_calls_per_month: custom
+    file_retention_months: custom
+    seats: custom
+```
+
+**5.63.2 Qwen-VL 配额**
+
+- 按套餐月度配额
+- 用量计量：每次 VL 调用计 token + 次数
+- 超额：① 限流（拒绝并提示升级）② 或按量计费（套餐外单价）
+- 配额告警：80% / 95% / 100%
+- file hash 缓存命中不计费（v9 优化）
+
+**5.63.3 文件保留计费**
+
+- 默认 1 年免费
+- 超期保留：按存储量/月计费
+- 财务相关文件（付款凭证）强制保留 5 年（合规，单独计费或包含）
+- 客户可选"延长保留"增值服务
+
+**5.63.4 用量计量与账单**
+
+```yaml
+usage_metering:
+  - vl_calls
+  - storage_gb_months
+  - active_seats
+  - message_volume（可选）
+billing_cycle: monthly
+quota_enforcement: soft（提示）| hard（限流）  # 可配
+```
+
+**5.63.5 配额与功能降级**
+
+- VL 配额耗尽 → 询价图片/PDF 解析降级为"请用文字描述或联系销售"
+- 不影响核心文字询价 / 报价 / 议价（这些不耗 VL）
+- 提示企业升级套餐
+
+### 5.64 Tool Registry（v15 增量）
+
+| 工具 | 入参 | 说明 |
+|---|---|---|
+| `create_inquiry_order` | items[], customer_id | 自建询价单 |
+| `generate_material_cert` | batch_no/order_id | 生成材质书 PDF |
+| `submit_payment_voucher_selfbuilt` | image, order_ids | 自建付款凭证（替代原 ERP 调用） |
+| `create_shipment_urge` | order_id, message | 自建发货催办 |
+| `edit_quote_line` | quote_id, line_no, changes | 交互式逐行改 |
+| `generate_quote_pdf` | quote_id | 生成报价单 PDF |
+| `check_quota` | tenant_id, resource | 查配额 |
+
+### 5.65 Storage（v15 新增表）
+
+| 表 | 用途 |
+|---|---|
+| `inquiry_order` | 自建询价单 |
+| `material_cert` | 材质书 |
+| `payment_voucher` | 付款凭证（自建） |
+| `shipment_urge` | 发货催办工单 |
+| `quote_pdf` | 报价单 PDF 版本 |
+| `category_field_config` | 品类要素必填配置 |
+| `saas_plan` | 套餐定义 |
+| `tenant_subscription` | 企业订阅 |
+| `usage_metering` | 用量计量 |
+| `quota_alert_log` | 配额告警 |
+| `erp_sync_log` | 自建能力与 ERP 同步/对账 |
+
 ---
 
 ## 6. 钢铁贸易话术与体验（v7 增量）
@@ -3860,6 +4197,9 @@ HRB400 螺纹钢 Φ25 沙钢 50t
 | **M42 Configuration Center（v14）** | 多租户配置存储 + 25+ 类配置项 + 版本化 + 审计 + 灰度发布 + 后台 UI + 热加载 |
 | **M43 客户细分 + 销售话术 + 竞品可信度（v14）** | Customer Segment + Order Profit Floor 按 segment 差异化 + Sales Style Profile + Competitor Credibility + 专项黑名单 |
 | **M44 销售级别 + SKU 白名单 + 学习参数收紧（v14）** | junior/mid/senior + 入职衰减保底 + 配额差异 + Machine-quotable SKU Whitelist + 学习冷启 60 + 双窗 + 30 天 A/B |
+| **M45 自建能力层（v15）** | 创建询价单 + 材质书 PDF 生成/管理 + 付款凭证（自建）+ 发货催办 + 与 ERP 同步对账 |
+| **M46 交互式报价编辑 + 品类要素配置（v15）** | 报价 PDF + 逐行快速修改（卡片/H5/语音）+ 整单逐行双模式 + 品类要素必填配置 |
+| **M47 计费与配额（v15）** | SaaS 套餐 + Qwen-VL 配额 + 文件保留计费 + 用量计量 + 账单 + 配额告警 |
 
 ---
 
@@ -3928,6 +4268,14 @@ HRB400 螺纹钢 Φ25 沙钢 50t
 | **学习冷启样本数 60 导致新客户长期走默认**（v14） | 新客体验差 | 用客户类型 + 地区 + 行业默认兜底；销售可手动覆盖默认值；冷启动期间客户偏好画像仍记录但不应用 |
 | **销售级别衰减算法错杀新人**（v14） | 新人接不到单 | 新人保底逐月衰减；季度复盘新人留存率；衰减规则可配置 |
 | **SKU 白名单覆盖不全**（v14） | 大量规格走人工拖慢响应 | 销售可一键提报；常用 SKU 自动巡检；批量导入工具；定期 review |
+| **自建能力与 ERP 数据不一致**（v15） | 询价/凭证/催办与 ERP 脱节 | 每日对账 + 写回机制 + 差异告警；明确"哪些数据以谁为准" |
+| **自建材质书数据来源不全**（v15） | 化学成分/力学性能缺失 | 优先从 ERP/质检系统拉；缺失走人工录入；模板校验必填字段 |
+| **付款凭证写回 ERP 失败**（v15） | 财务核销错乱 | 写回失败入重试队列 + 人工兜底；核销前财务双确认 |
+| **交互式改报价频繁重算压力**（v15） | 性能 / 库存锁争用 | 改动防抖（debounce）+ 重算异步 + 库存乐观锁 |
+| **VL 配额耗尽影响询价**（v15） | 图片/PDF 询价不可用 | 降级为文字询价 + 提示升级；核心文字流程不受影响 |
+| **文件保留计费争议**（v15） | 客户对账单有异议 | 用量计量透明 + 账单明细 + 超期前提醒 |
+| **PDF 报价单与系统数据不一致**（v15） | 客户拿旧 PDF 主张 | PDF 带版本号水印 + 有效期 + 以系统最新版本为准条款 |
+| **多 sheet 反问增加交互轮次**（v15） | 客户体验 | 智能猜测主 sheet（按命名/数据量）+ 反问时给推荐选项 |
 | **OCR 单供应商风险**（v9） | 通义千问限流/故障时所有视觉能力受影响 | 企业级 SLA 配额；Qwen-VL-Max → Plus 内部降级；解析失败转人工 + 告警；演进项预留 DeepSeek-VL 应急备选 |
 | **Qwen-VL OCR 对非标准票据/手写识别下降**（v9） | 付款凭证关联订单错位 | 规则正则二次校验金额/卡号末四位；不唯一时反问客户；财务最终人工确认才落账 |
 | **DashScope 计费失控**（v9） | 视觉 token 量大费用飙升 | 文件 hash 缓存（同图不重复识别）；按客户 / 日 配额；图片预先压缩到合理分辨率；非询价/付款凭证场景一律不走 VL |
@@ -4181,30 +4529,29 @@ v13 新增（留货下单相关）：
 
 合计 **62 个**待确认问题已转化为决策（已落实到对应模块 + Configuration Center 5.53）。
 
-### 剩余待定（来自 v3~v6）
+### v15 已全部确认（来自 v3~v6 的 15 个早期问题）
 
-需求方尚未答复的 15 个早期问题（重新列出供后续确认）：
+✅ 全部 15 个早期问题已确认，详见 1.14 章。关键结论：
+- 业务系统**可配合开发 Inbound Webhook**
+- **4 个能力 ERP 不支持** → 本系统自建（询价单/材质书/付款凭证/发货催办）
+- 报价附 PDF + **交互式逐行快速修改**
+- 9 要素必填**按品类配置**
+- 文件保留 + VL **做成 SaaS 计费/配额**
+- 销售 **Bot 内 /reply**；绑定 **token + 短信都支持**；**不做群聊**
 
-1. **业务系统能否配合开发 Inbound Webhook**（quote.ready / settlement.created / payment.* / shipment.*）？
-2. **业务 API 是否支持以下操作**？
-   - 按客户+时间查留货订单
-   - 按客户查欠款汇总/明细
-   - 创建询价单（支持 v5 的 9 要素完整结构 + 批量）
-   - 按订单/车牌查装车重量
-   - 按炉号/订单查材质书 PDF
-   - 按客户+月份查结算单 PDF
-   - 提交付款凭证（写）
-   - 提交发货催办（写）
-3. 询价 ERP 报价流：销售逐 item 报价还是整单？
-4. 报价回推是否需要同时附 PDF 报价单？
-5. 询价 9 要素中，业务 API 接收时哪些必填？哪些可空？
-6. **客户偏好画像是 Bot 侧维护还是同步 CRM**？冲突时以谁为准？（v10 #1 已部分确认：可配置二选一）
-7. **运营是否需要 KB 维护后台**？谁来维护词典（销售运营 / 技术）？（v11 已部分确认：业务部）
-8. 多 sheet Excel 询价处理：默认询第一个 sheet？反问？
-9. 询价文件保留 1 年合规吗？
-10. **VL 模型预算（Qwen-VL 系列）**？月调用次数、每月预算上限、是否要按客户 / 日做 token 配额？
-11. 销售在 Bot 里 /reply 还是 ERP 里操作？
-12. 询价/催发货/付款核对 SLA 各是多少？（v10 #7/#8 已部分确认：5min ACK + 20min 回客户）
-13. 客户绑定方式：销售生成 token / 手机号短信 / 都要？
-14. 是否需要群聊场景？
-15. v12 #8 **LLM 占位符话术 review** —— 开发期任务，需求方提供 review 样例标准。
+### 全部待确认问题状态
+
+| 批次 | 个数 | 状态 |
+|---|---|---|
+| v7 议价 | 8 | ✅ v14 确认 |
+| v8 改量 | 7 | ✅ v14 确认 |
+| v10 路由 | 15 | ✅ v14 确认 |
+| v11 替代料 | 9 | ✅ v14 确认 |
+| v12 学习 | 11 | ✅ v14 确认 |
+| v13 留货 | 12 | ✅ v14 确认 |
+| v3~v6 早期 | 15 | ✅ **v15 确认** |
+| **合计** | **77** | **全部确认** |
+
+**开发期遗留**：
+- v12 #8 LLM 占位符话术 review（需需求方提供样例标准，开发期协作）
+- 各"可配置项"的企业初始默认值（实施时与各企业确认）
