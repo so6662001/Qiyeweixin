@@ -2079,5 +2079,123 @@ price_composition:
 | `discount_rate_config` | 贴现率配置 |
 | `customer_settlement_preference` | 客户结算/开票/交付偏好（学习） |
 
+### 5.67 Quote Delivery & Interaction（报价投递与交互 - v17 核心）
+
+**5.67.1 投递编排**
+
+```
+报价生成（Pricing + Composition）
+   ↓
+Quote Delivery 编排，按渠道能力选择投递组合：
+
+微信客服（外部客户）:
+  1. 发文字摘要（纯文本，空格对齐 + emoji）
+  2. 发 PDF 报价单（file 消息）
+  3. 发菜单消息 msgmenu（轻交互选项）
+  4. 发 H5/小程序链接（重交互，可选）
+
+企业微信（内部销售）:
+  1. 发模板卡片 template_card（带按钮）
+  2. 附 PDF
+```
+
+**5.67.2 文字摘要渲染（微信不支持 Markdown）**
+
+```python
+def render_text_summary(quote):
+    # 微信纯文本，用空格对齐 + emoji，不用 Markdown 表格
+    lines = ["📋 您的报价已出（{} 行，含税合计 ¥{}）".format(n, total)]
+    for i, line in enumerate(quote.lines, 1):
+        lines.append(f"{i}. {line.sku} {line.qty}吨  ¥{line.unit_price}/吨")
+    lines.append(f"结算：{settlement} | 交付：{delivery} | 有效期 {valid}h")
+    return "\n".join(lines)
+```
+
+**5.67.3 菜单消息（msgmenu）**
+
+```json
+{
+  "msgtype": "msgmenu",
+  "msgmenu": {
+    "head_content": "请选择您的操作：",
+    "list": [
+      {"type":"click","click":{"id":"accept","content":"① 接受下单"}},
+      {"type":"click","click":{"id":"reserve","content":"② 申请留货"}},
+      {"type":"click","click":{"id":"negotiate","content":"③ 我要议价"}},
+      {"type":"click","click":{"id":"amend","content":"④ 修改数量"}},
+      {"type":"click","click":{"id":"human","content":"⑤ 转人工"}}
+    ],
+    "tail_content": "或直接回复文字，如『便宜点』『第3行改80吨』"
+  }
+}
+```
+
+客户点击 → 回传 click.id → 路由对应流程。
+
+**5.67.4 对话式意图路由**
+
+```python
+INTENT_ROUTES = {
+    "accept":     to_order_flow,         # 4.x 下单
+    "reserve":    to_reservation_flow,   # 4.15 留货
+    "negotiate":  to_negotiation_flow,   # 4.8 议价
+    "amend":      to_amendment_flow,     # 4.10 改量
+    "human":      to_lead_routing,       # 4.11 转人工
+    "composition_change": to_composition_recalc,  # v16 构成调整
+}
+
+def handle_customer_reply(msg):
+    if msg.is_menu_click:
+        return INTENT_ROUTES[msg.click_id](...)
+    intent = llm_classify(msg.text)   # "便宜点"→negotiate, "第3行改80吨"→amend
+    return INTENT_ROUTES[intent](...)
+```
+
+**5.67.5 页面式（H5/小程序）**
+
+```
+报价详情页（H5 或小程序）：
+  - 顶部全局选项：开票(一票/两票) / 结算(现金/承兑/账期) / 交付(自提/送货/代送)
+  - 逐行明细：数量可编辑、删除、单独议价按钮
+  - 切换任意选项 → 调后端重算 API → 实时刷新总价
+  - 底部：[全部确认下单][申请留货][提交议价][转销售]
+  - 提交 → 回调 Bot → 微信对话流确认
+
+技术：
+  - H5：企业微信 OAuth 获取身份 + 后端 API
+  - 小程序：需开发钢贸小程序（增强版，长期可选）
+  - 后端共用 Interactive Quote Editor（5.61）逻辑
+```
+
+**5.67.6 降级链**
+
+```
+首选：文字摘要 + PDF + H5/小程序链接
+  ↓ H5/小程序不可用 / 客户不点
+文字摘要 + PDF + 菜单消息
+  ↓ 菜单不支持
+纯文字摘要 + 文字快捷指令（"回复 1 接受 / 2 留货 / 3 议价"）
+  ↓ 文件发送失败
+纯文字摘要兜底
+```
+
+**5.67.7 与模块联动**
+
+| 模块 | 联动 |
+|---|---|
+| Interactive Quote Editor（5.61） | H5/小程序前端 + 逐行重算后端 |
+| Price Composition（5.66） | 页面全局选项切换 → 重算 |
+| 议价/改量/留货 | 双路径均触发同一后端流程 |
+| Quote Lifecycle（5.31） | 每次改生成新版本 + 新 PDF |
+| Billing & Quota（5.63） | H5/小程序/PDF 生成计入用量（如适用） |
+
+**5.67.8 新增存储**
+
+| 表 | 用途 |
+|---|---|
+| `quote_delivery_log` | 投递记录（渠道/形式/送达状态） |
+| `quote_interaction_event` | 客户交互事件（菜单点击/页面操作/文字指令） |
+| `h5_quote_session` | H5/小程序报价会话态 |
+
 ---
 
