@@ -1,14 +1,18 @@
-# 企业微信机器人 — 设计文档（v13）
+# 企业微信机器人 — 设计文档（v14）
 
 > 状态：设计阶段（尚未开发）
 > 行业：**钢铁贸易**
 > 目标：搭建一个企业微信智能机器人，对接 8 项后端能力，覆盖内部员工和外部微信客户，接入 LLM（DeepSeek / 通义千问，含 VL 视觉模型）。
-> **v13 核心**：**留货下单动作（Reserve Order）**——介于"锁价"和"正式下单"之间的承诺态：库存独占 + 定金锁定 + 期限到期前可转正式订单。包含完整生命周期（CREATED/ACTIVE/EXPIRED/CONVERTED/CANCELLED）、定金规则（品类/客户类型差异）、过期工单（提前提醒+自动释放+违约金）、与改量/议价的特殊衔接、Inventory Matcher 库存状态扩展（available/reserved/sold）。
-> **v12 核心**：自我学习三层架构 + 5 道幻觉防护；品类+规格全空转人工。
-> **v11**：替代料推荐。
-> **v10**：转人工路由 + 销售评分。
-> **v9**：OCR 统一 Qwen-VL。
-> **v8**：报价生命周期 + 改量。
+> **v14 核心**（本次大批量需求确认引出的 8 个架构变化）：
+> ① **Configuration Center**（企业配置中心）：承载本次确认的 25+ 个可配置项，按企业（多租户）+ 类型管理；
+> ② **客户细分**：Customer Profile 新增 segment（下级经销商 / 终端企业），整单毛利底线按 segment 差异（默认 ¥10/吨 vs ¥200/吨）；
+> ③ **Sales Style Profile**：议价话术按销售个人风格定制；
+> ④ **Competitor Credibility Score**：虚假竞品积分式信用扣减 + 严重者销售提报专项黑名单日志；
+> ⑤ **改量规则细化**：±5% 内放行 / 累计±10% 必审批 / 减量退价按档分级；
+> ⑥ **销售级别体系**（junior/mid/senior）+ 配额差异化 + 新人保底按入职时间衰减；
+> ⑦ **学习参数收紧**：冷启动样本数 10 → 60；7 天短窗 + 90 天长窗双轨；A/B 灰度 30 天/期；
+> ⑧ **可机器报价 SKU 白名单**：未在白名单的规格直接转销售。
+> **v13 核心**：留货下单 + 库存独占。**v12**：自我学习 + 幻觉防护。**v11**：替代料推荐。**v10**：转人工路由 + 销售评分。**v9**：OCR 统一 Qwen-VL。**v8**：报价生命周期 + 改量。
 
 ---
 
@@ -35,6 +39,14 @@
 | **17（v12 新）** | **品类 + 规格同时缺失 → 自动转销售**（与"无库存""未定价"并列） | 显式作为 Lead Routing Engine 第 14 种触发场景；客户连续 2 轮反问都答不上来时升级 |
 | **18（v12 新）** | **系统自我学习，下次给出更合理价格；但绝不出 AI 幻觉** | **三层架构**：统计学习层 + 规则决策层 + LLM 解释层；**4 学 4 不学**原则；**5 道幻觉防护栏**（数字溯源/置信度门槛/冷启动保护/drift 监控/A/B 灰度）；学到的是参数，决策仍由规则；学的全程可追溯 |
 | **19（v13 新）** | **留货下单动作**（锁价 → 留货 → 下单 三阶段中间态：库存独占 + 收定金 + 留货期内可转单/可改/可议价限制） | **Reservation Engine + Deposit Manager + Inventory Allocation Tracker + Reservation Expiry Workflow + Quote 生命周期扩展 RESERVED 状态** |
+| **20（v14 新）** | **企业级可配置**：v7~v13 的 25+ 个阈值/比例/开关均做成可配置项 | **Configuration Center 模块（多租户 + 分类型 + 审计 + 灰度发布）** |
+| **21（v14 新）** | **客户细分（下级经销商 vs 终端企业）+ 毛利底线差异化** | Customer Profile 新增 segment 字段；整单 Optimizer 按 segment 查毛利底线（默认下级经销商 ¥10/吨、终端企业 ¥200/吨；可配） |
+| **22（v14 新）** | **议价话术按销售个人风格定制** | Sales Style Profile 模块（个人话术池 / 口头禅 / 语气强度），LLM prompt 注入 |
+| **23（v14 新）** | **虚假竞品积分式信用扣减** + 严重者销售提报专项黑名单日志 | Competitor Credibility Score 模块；专项黑名单（与普通黑名单分离）+ 强制审计日志 |
+| **24（v14 新）** | **改量规则细化** | ±5% 放行 / 累计±10% 审批；减量退价按档分级（不一刀切）；每个版本都保留 |
+| **25（v14 新）** | **销售级别（junior/mid/senior）+ 入职时间衰减保底** | Sales Profile 扩展 level 字段；配额差异化；新人保底概率按 onboarding_months 衰减 |
+| **26（v14 新）** | **学习参数收紧** | 冷启动 10 → 60；7 天短窗 + 90 天长窗双轨；A/B 灰度 30 天/期；学习足迹仅主管可见 |
+| **27（v14 新）** | **可机器报价 SKU 白名单** | 未在白名单的规格直接转销售（v10 "未定价" 触发的实现机制） |
 
 ---
 
@@ -487,6 +499,117 @@ StockSnapshot:
 
 ---
 
+### 1.12 已确认决策清单（v14 本次确认）
+
+> 本次需求方一次性确认了 v7~v13 共 60 个待确认问题。下面是关键决策清单（参数细节见各模块和 Configuration Center）。
+
+#### 1.12.1 议价决策（v7 已确认）
+
+| # | 决策 | 落地 |
+|---|---|---|
+| 1 | 议价始终强制升档到 Assisted（Auto 不直接议价） | 4.8 / 5.24 |
+| 2 | 让步曲线节奏（求利 0.5/0.25/0.1 / 求量量绑定 / 战略 0.7）符合业务 | 5.25 |
+| 3 | **整单毛利底线按客户 segment 差异**：下级经销商 ¥10/吨 / 终端企业 ¥200/吨；**企业可针对客户类型配置** | **5.26 + 5.53 配置中心** |
+| 4 | 8 种让步货币都允许 Bot 用；**账期延长涉及信用 → 走风控审批** | 5.27 |
+| 5 | **议价话术按销售个人风格定制**（不是公司统一池） | **5.54 Sales Style Profile** |
+| 6 | 议价轮数上限 5 轮 | 5.24 |
+| 7 | 跨天议价行情变化 → 提示销售人工决定 | 4.8 |
+| 8 | **客户虚假竞品 → 积分式信用扣减**；严重者销售提报 → 进**专项黑名单**（专项日志） | **5.55 Competitor Credibility System** |
+
+#### 1.12.2 改量决策（v8 已确认）
+
+| # | 决策 | 落地 |
+|---|---|---|
+| 1 | 改量频次阈值 3 / 10 符合业务 | 5.32 |
+| 2 | **锁价后改量：±5% 内放行 / 累计±10% 必走审批** | **5.32 决策树调整** |
+| 3 | 加量超库存的拆批 vs 整批均支持，**转人工确认** | 4.10 / 5.32 |
+| 4 | **减量退价分档**：不一刀切，按减量大小分级 | **5.32 + 减量档位表** |
+| 5 | 改量后所有版本都保留 | 5.31（已支持） |
+| 6 | 议价中改量不计入议价轮次 | 4.10 / 5.24 |
+| 7 | **改到 0 撤单**：需客户额外确认；**影响下次询价待遇**（写入 customer behavior） | 4.10 / 5.17 |
+
+#### 1.12.3 转人工 / 销售路由决策（v10 已确认）
+
+| # | 决策 | 落地 |
+|---|---|---|
+| 1 | 客户绑定销售来源：**企业可配（CRM 同步 / Bot 自建 二选一）** | 5.53 配置中心 |
+| 2 | 销售评分 7 维权重符合；**企业可调** | 5.53 配置中心 |
+| 3 | 抽签温度 T 默认 1.0 | 5.33 |
+| 4 | **每销售每日配额按级别（junior/mid/senior）差异化** | **5.35 + 5.56 销售级别体系** |
+| 5 | **新人保底按入职时间衰减** | **5.33 + 5.56** |
+| 6 | VIP 名单：企业指定，**6 个月复审**一次 | 5.35 |
+| 7 | ACK SLA 默认 5 分钟 | 5.33 |
+| 8 | **回客户 SLA 默认 20 分钟**（可配） | 5.33 + 5.53 |
+| 9 | **拒单率上限默认 10%**，超则自动停接新单 | 5.34 + 5.53 |
+| 10 | 库存数据 **5 分钟级实时** | 5.47 |
+| 11 | **维护"可机器报价 SKU 白名单"** | **5.57 SKU Whitelist** |
+| 12 | 销售互调默认允许 + 主管事后审批；**企业可设禁止** | 5.33 + 5.53 |
+| 13 | 池抽签中签概率**对销售透明** | 5.33 + 6.7 销售视图 |
+| 14 | 客户可主动申请换销售：审批通过即换 + **作重点事务通知销售主管** | 5.33 + 工单 |
+| 15 | 销售离职：自动解绑 + **指定人接手**（不走池） | 5.33 |
+
+#### 1.12.4 替代料决策（v11 已确认）
+
+| # | 决策 | 落地 |
+|---|---|---|
+| 1 | KB 由销售部整理；**规则不少于 10 条**起步 | 5.36 |
+| 2 | 客户类型 → 接受度策略：**做成配置项** | 5.53 |
+| 3 | **用途场景识别需补充行业关键词**（不同用途决定材料要求） | 5.36 + 5.37 |
+| 4 | 完全有货时是否推替代：**可配置**；同货异长度等"替代后客户也受益"的可推 | 5.38 + 5.53 |
+| 5 | **替代料分两类**：① 相近规格（不符合销售规则，必走销售确认）；② 双方需知晓（用签收清单，**不做专门合同条款**） | **5.38 强化** |
+| 6 | caveat（尺寸公差等）默认提示；**可配置** | 5.36 + 5.53 |
+| 7 | 让利分配：**可配置** | 5.53 |
+| 8 | **不需要工程方现场签字**，但需明确告知是替代料 | 5.38 |
+| 9 | KB 由业务部维护；**规则化为主，很少改**（如管材壁厚公差±0.25） | 5.36 |
+
+#### 1.12.5 自我学习 + 品类规格全空决策（v12 已确认）
+
+| # | 决策 | 落地 |
+|---|---|---|
+| 1 | **学习窗口：7 天短窗 + 90 天长窗双轨** | 5.40 |
+| 2 | 置信度门槛 0.7 符合 | 5.42 |
+| 3 | **冷启动样本数 60**（不是 10） | 5.42 |
+| 4 | **Drift 阈值：可配置** | 5.43 + 5.53 |
+| 5 | **A/B 灰度：30 天/期 + 倾向更稳** | 5.42 |
+| 6 | **学习足迹仅主管看**（销售不可见） | 5.44 + 6.9 |
+| 7 | 不学习目标白名单默认即可 | 5.44 |
+| 8 | **LLM 占位符话术需 review 一批生成示例确认**（开发期任务） | M40 + 待定 |
+| 9 | **保留"建议销售考虑改客户类型"**（自动重分类禁，但人审建议保留） | 5.17 |
+| 10 | **销售个人看不到自己的学习指标**，但能看客户画像（接受率/决策时长等） | 5.17 + 5.34 |
+| 11 | 品类+规格全空反问 2 轮即转人工 | 4.14 |
+
+#### 1.12.6 留货决策（v13 已确认）
+
+| # | 决策 | 落地 |
+|---|---|---|
+| 1 | 留货定金率：**企业按品类可配** | 5.48 + 5.53 |
+| 2 | 留货期限：**可配置** | 5.46 + 5.53 |
+| 3 | 单客户未结清留货上限：**可配置** | 5.46 + 5.53 |
+| 4 | 过期违约金处理模式：**可配置**（三选一） | 5.48 + 5.53 |
+| 5 | 战略客户免定金权限：**可配置** | 5.48 + 5.53 |
+| 6 | 大单地板规则：**可配置** | 5.48 + 5.53 |
+| 7 | 留货中议价特批阈值：**可配置** | 5.46 + 5.53 |
+| 8 | 留货中加量库存够：**需客户重新确认**（不自动扩展） | 4.15 阶段 9 |
+| 9 | 业务系统**能提供 deposit webhook** | 5.10 Inbound Webhook |
+| 10 | 业务库存查询**支持按 sku 查 available/reserved/sold** | 5.47 |
+| 11 | 延期审批流：**可配置**（一级或二级） | 5.46 + 5.53 |
+| 12 | 留货过期前 1h 销售联系：**默认硬性 KPI**；**可配置** | 5.49 + 5.53 |
+
+### 1.13 v14 关键架构变化总览
+
+| 架构变化 | 影响模块 |
+|---|---|
+| Configuration Center（多租户配置中心） | 全系统 |
+| Customer Segment（下级经销商/终端企业） | 5.17 客户画像 + 5.26 整单 Optimizer + 5.18 报价策略 |
+| Sales Style Profile（个人话术） | 5.28 议价 LLM |
+| Competitor Credibility Score（虚假竞品扣分） | 5.24 议价会话 + 5.17 客户画像 |
+| 改量规则细化（±5%/±10% / 减量分档） | 5.32 Amendment |
+| 销售级别体系（junior/mid/senior） | 5.35 销售状态 + 5.33 路由 |
+| 学习参数收紧（冷启 60 / 双窗 / 30 天 A/B） | 5.40~5.44 |
+| 可机器报价 SKU 白名单 | 5.18 Pricing + 5.33 Lead Routing |
+
+---
+
 ## 2. 通道选型 / 3. 总体架构（v6 基础 + v7 新模块）
 
 ```
@@ -648,6 +771,43 @@ StockSnapshot:
       - 过期自动释放
       - 转单触发
       - 延期审批
+
+   ─────────── v14 新增配置/学习/客户细分模块 ───────────
+
+   ㊱ Configuration Center（企业配置中心 - v14 核心）
+      - 多租户配置存储（按 tenant_id）
+      - 25+ 类可配置项（议价/改量/路由/替代料/学习/留货/客户细分）
+      - 类型分组（PRICING / NEGOTIATION / ROUTING / LEARNING / RESERVATION / SUBSTITUTE / SLA）
+      - 版本化 + 审计 + 灰度发布（5% → 20% → 100%）
+      - 后台可视化 UI + JSON Schema 校验
+      - 配置热加载（不停机生效）
+
+   ㊲ Customer Segment Manager（客户细分管理 - v14）
+      - 在 customer_profile 上扩展 segment: dealer | terminal
+      - 整单 Optimizer 按 segment 查毛利底线
+      - 默认：dealer ¥10/吨 / terminal ¥200/吨（企业可配）
+      - 销售可手动调（带原因审计）
+
+   ㊳ Sales Style Profile（销售话术风格 - v14）
+      - 每销售一份风格档案（口头禅/语气强度/常用比喻）
+      - LLM Prompt 注入 + few-shot 示例 + 输出风格控制
+      - 仍走幻觉防护（数字占位符强制）
+
+   ㊴ Competitor Credibility System（竞品可信度系统 - v14）
+      - 每客户每竞品维护 credibility_score（0~100）
+      - 历次"提竞品但未走"扣分；历次"提竞品成功验证"加分
+      - 销售可提报"严重虚价"→ 进**专项黑名单**（与普通黑名单分离）
+      - 专项黑名单变更必须留**完整审计日志**
+
+   ㊵ Sales Level System（销售级别体系 - v14）
+      - junior / mid / senior 三级
+      - 配额差异化：日新单配额按级别（默认 5 / 8 / 12）
+      - 新人保底：按入职月数衰减（onboarding ≤ 3 月：保底 15%；4~6 月：10%；7~12 月：5%；> 12 月：0%）
+
+   ㊶ Machine-quotable SKU Whitelist（可机器报价 SKU 白名单 - v14）
+      - SKU 维度白名单（品类 + 牌号 + 规格组合）
+      - 不在白名单的规格 → "未定价"路径（v10）→ 转销售
+      - 销售可定期 review + 提报新增/移除
 
 
 ---
@@ -1629,9 +1789,32 @@ OrderProfitView {
   适合：战略客户
 ```
 
-**5.26.3 整单底线**
+**5.26.3 整单底线（v14 按客户 segment 差异化）**
 
-整单加权毛利率 < min_blended_margin → 拒绝继续让步 → 转销售。
+整单加权毛利率 / 每吨毛利 < min_blended_margin → 拒绝继续让步 → 转销售。
+
+```yaml
+# v14 客户细分驱动的整单毛利底线（可配置）
+order_profit_floor:
+  by_segment:
+    dealer:       # 下级经销商（以挂牌价为成本核算）
+      min_margin_per_ton: 10
+      cost_basis: list_price       # 用挂牌价做成本基线
+    terminal:     # 终端企业
+      min_margin_per_ton: 200
+      cost_basis: actual_cost      # 用实际进货成本
+  per_customer_override:           # 个别客户可单独配
+    cust_xxx: { min_margin_per_ton: 50 }
+  per_category_modifier:           # 品类微调（如不锈钢更高底线）
+    不锈钢: × 1.5
+```
+
+整单 Optimizer 流程调整：
+1. 取客户 segment（dealer / terminal）
+2. 取 cost_basis（list_price 或 actual_cost）
+3. 算 min_margin = floor(segment) × category_modifier
+4. 整单加权毛利 < min_margin → REJECT
+5. 否则按 5.26.2 跨项让步分配
 
 ### 5.27 Counter-offer Generator（v7 新增）
 
@@ -1841,8 +2024,9 @@ Output: AmendmentDecision {
 }
 ```
 
-**5.32.2 决策树**
+**5.32.2 决策树（v14 细化锁价后规则 + 减量退价分档）**
 ```
+═══ 锁价前 / 普通改量 ═══
 amend.delta_pct
   ≤ 10%
      ↓ + 合规全过 + 非锁价 + 非议价
@@ -1853,16 +2037,29 @@ amend.delta_pct
   > 30%
      ↓
      new_qty < MOQ          → CUSTOMER_CHOICE
-     new_qty 超库存上限     → MANUAL
+     new_qty 超库存上限     → MANUAL（含转人工拆批确认 / 整批二选一）
      new_qty 超 Auto 上限   → ASSISTED 或 MANUAL（看金额）
-     new_qty == 0           → REJECT + 撤单
+     new_qty == 0           → REJECT + 撤单（**v14：需客户额外确认 + 写入 ghost 行为**）
      其余                   → ASSISTED
 
-修饰：
-  锁价后                → MANUAL（销售审批）
-  议价中                → 不走本流程，转 4.8
-  改量次数 ≥ 3          → MANUAL + 软干预
-  整单底线破            → MANUAL
+═══ 锁价后（LOCKED）v14 细化 ═══
+单次幅度  ≤ ±5%   AND  累计幅度 ≤ ±10%  → AUTO（小幅放行，无需审批）
+单次 ≤ ±5%       AND  累计 > ±10%       → ASSISTED（销售确认）
+单次 > ±5%       AND  累计 > ±10%       → MANUAL（主管审批）
+改规格/产地/目的地                       → MANUAL（原锁价作废，新询价）
+
+═══ 减量退价档位（v14 新，不一刀切）═══
+减量幅度    单价处理
+  ≤ 5%      保持原单价（锁价承诺）
+  5~15%     回到无量阶梯标准档
+  15~30%    回到无量阶梯 + 加 ¥10/t（小批量成本）
+  > 30%     必须 ASSISTED（销售判断）+ 重新整单 Optimizer 校验
+
+═══ 修饰 ═══
+  议价中改量            → 不走本流程，转 4.8（**不计入议价轮次**）
+  改量次数 ≥ 3          → MANUAL + 软干预 L4
+  整单底线破            → MANUAL（按 5.26 客户 segment 查底线）
+  锁价后 + 任意改量      → 走"锁价后"分支
 ```
 
 **5.32.3 模块协同**
@@ -2741,6 +2938,345 @@ ACTIVE / LOCKED  ──── reserve ────▶  RESERVED   ──── c
 - Amendment Engine 走 v13 的留货改量子流程（4.15 阶段 9）
 - 库存查询时该 sku 已扣除留货量
 
+### 5.53 Configuration Center（企业配置中心 - v14 核心）
+
+**5.53.1 设计目标**
+
+承载本次确认的 25+ 个"可配置项"。多租户 / 多类型 / 版本化 / 审计 / 灰度。
+
+**5.53.2 分类与示例**
+
+```yaml
+# === PRICING ===
+pricing.auto_quote_amount_limit: 500_0000      # Auto 档金额上限
+pricing.cost_basis_default: actual_cost
+
+# === ORDER_PROFIT_FLOOR ===
+profit_floor.dealer.min_margin_per_ton: 10
+profit_floor.terminal.min_margin_per_ton: 200
+profit_floor.category_modifier.不锈钢: 1.5
+
+# === NEGOTIATION ===
+negotiation.max_rounds: 5
+negotiation.concession_curve.profit_seeker: [0.5, 0.25, 0.1, 0.05]
+negotiation.term_extension_requires_credit_approval: true
+
+# === AMENDMENT ===
+amendment.locked.single_pct_threshold: 5     # 单次幅度
+amendment.locked.cumulative_pct_threshold: 10 # 累计幅度
+amendment.per_quote_max: 3
+amendment.per_day_per_customer_max: 10
+amendment.decrease_pricing_tiers:
+  - { max_pct: 5,   policy: keep_locked_price }
+  - { max_pct: 15,  policy: standard_tier }
+  - { max_pct: 30,  policy: standard_tier_plus_10 }
+  - { max_pct: 999, policy: manual }
+
+# === ROUTING ===
+routing.binding_source: crm | bot           # 客户绑定销售来源
+routing.T: 1.0
+routing.ack_deadline_minutes: 5
+routing.reply_deadline_minutes: 20          # v14: 30 → 20
+routing.decline_rate_threshold: 0.10        # 拒单率 10%
+routing.daily_quota:
+  junior: 5
+  mid:    8
+  senior: 12
+routing.newcomer_floor:
+  onboarding_le_3m: 0.15
+  onboarding_le_6m: 0.10
+  onboarding_le_12m: 0.05
+  else: 0.0
+routing.sales_swap_allowed: true             # 销售互调
+routing.show_pick_probability_to_sales: true # 中签概率透明
+
+# === SUBSTITUTE ===
+substitute.full_stock_proactive_when:
+  - same_grade_diff_length_better_price       # 同档异长度更优可推
+substitute.acceptance_strategy_by_segment:
+  dealer:    aggressive
+  terminal:  conservative
+substitute.caveat_default_show: true
+substitute.savings_share_ratio: 0.5          # 让利分配（让 50% 给客户）
+
+# === LEARNING ===
+learning.window_short_days: 7
+learning.window_long_days: 90
+learning.cold_start_sample: 60               # v14: 10 → 60
+learning.confidence_threshold: 0.7
+learning.drift_threshold_warn: 0.20
+learning.drift_threshold_critical: 0.40
+learning.ab_period_days: 30                  # v14: 7 → 30
+learning.ab_phase_ratios: [0.05, 0.20, 1.0]
+learning.trace_visibility: supervisor_only   # 仅主管看
+
+# === RESERVATION ===
+reservation.deposit_rate_by_category:
+  螺纹钢: 0.10
+  普通板材: 0.10
+  卷板: 0.15
+  中厚板: 0.15
+  不锈钢: 0.30
+  管材: 0.15
+reservation.duration_days_default:
+  strategic: 5
+  whitelist: 3
+  normal:    3
+  new:       1
+  warning:   1
+reservation.max_open_per_customer: 3
+reservation.forfeit_policy: hold_offset      # 默认扣50%冲下次
+reservation.strategic_waiver_authorized_roles: [sales_director, ceo]
+reservation.large_order_floor:
+  amount_threshold: 1_000_000
+  min_rate: 0.10
+reservation.market_drop_threshold_for_renegotiation: 0.03  # 行情跌 3% 可特批
+reservation.extension_approval_levels: [sales_lead]         # 一级
+reservation.expiry_1h_sales_kpi: true        # 销售必须接触客户
+
+# === SLA ===
+sla.routing_reply_minutes: 20
+```
+
+**5.53.3 配置类型**
+
+| 类型 | 含义 | 修改权限 |
+|---|---|---|
+| **system_param** | 阈值/比例（如 `negotiation.max_rounds`） | 业务管理员 |
+| **policy_rule** | 策略规则（如减量退价档位） | 销售总监 + 二人复核 |
+| **business_floor** | 业务红线（如毛利底线） | 老板 + 强制审计 |
+| **rate_table** | 费率表（如定金率） | 业务管理员 |
+| **whitelist_blacklist** | 白名单/黑名单 | 销售主管 |
+
+**5.53.4 灰度发布与回滚**
+
+```
+新配置 → 5% 流量 → 7 天观察 → 20% → 30 天观察 → 100%
+任何阶段异常 → 一键回滚
+business_floor 类型必须双人复核才能上线
+```
+
+**5.53.5 配置审计**
+
+```
+config_change_log {
+  config_key, old_value, new_value,
+  changed_by, changed_at, reason,
+  rollout_phase, approval_chain[]
+}
+```
+
+**5.53.6 配置加载**
+
+- 启动加载到 Redis（按 tenant + key 分桶）
+- 修改后发布事件，各服务订阅 → 热加载
+- 客户端总有 fallback 默认值（防止配置丢失致服务崩溃）
+
+### 5.54 Sales Style Profile（销售话术风格 - v14 新增）
+
+**5.54.1 数据模型**
+
+```yaml
+SalesStyleProfile:
+  sales_id
+  tone: 严谨 | 亲切 | 幽默 | 简洁 | 详细
+  intensity: 0~10        # 语气强度（0=平和，10=强势）
+  signature_phrases: ["听您的", "帮您争取", "兄弟你给个机会"]
+  forbidden_words: [...] # 个人禁用词
+  greeting: "张总好～"   # 个人开场白
+  closing: "您看下哈"    # 个人结束语
+  examples:              # few-shot 实例（议价话术）
+    - input: "客户砍 ¥30"
+      output: "张总，沙钢这批拿货成本就在那儿，我帮您让 ¥15 到 ¥3,805，锁价再帮您拉到 48h"
+  updated_at, reviewed_by
+```
+
+**5.54.2 与议价 LLM 集成**
+
+议价 LLM Prompt 注入：
+```
+System: 你是销售小张的助理 AI。
+你的语言风格：亲切（强度 6）
+常用语：「听您的」「帮您争取」「咱们这批」
+开场：「张总好～」
+结束：「您看下哈」
+... 标准议价 prompt ...
+
+User: [客户最新消息 + 议价上下文]
+```
+
+**5.54.3 风格学习**
+
+学习层（不学决策仅学话术风格）：
+- 从销售历史已确认话术中提取 signature_phrases
+- 销售可在管理后台编辑
+- 每月由销售本人 review
+
+**5.54.4 仍走幻觉防护**
+
+风格定制不绕过数字占位符强制。任何 LLM 输出仍需 DLP 扫描。
+
+### 5.55 Competitor Credibility System（竞品可信度 - v14 新增）
+
+**5.55.1 评分模型**
+
+```yaml
+CompetitorCredibility:
+  customer_id × competitor_name
+  score: 0~100   # 默认 50（中性）
+  history:
+    - {date, claimed_price, our_price, action_taken, eventual_outcome}
+  category: trusted | neutral | suspicious | blacklist
+```
+
+**5.55.2 扣分 / 加分规则**
+
+```yaml
+score_rules:
+  claim_competitor_but_buy_from_us:        # 提了竞品但买了我们
+    score_delta: -5
+    note: 可能虚价施压
+  claim_competitor_and_buy_from_competitor: # 提了竞品且真的去了
+    score_delta: +5
+    note: 可信
+  claim_competitor_no_follow_up:           # 提完没下文
+    score_delta: -2
+    note: 试探性
+  sales_reported_obvious_fake:             # 销售标记明显虚假
+    score_delta: -20
+    requires: sales_report_with_evidence
+```
+
+**5.55.3 应用**
+
+| 分数 | 类别 | 议价场景动作 |
+|---|---|---|
+| 80+ | trusted | 正常考虑竞品报价 |
+| 50~79 | neutral | 系统标注，销售判断 |
+| 20~49 | suspicious | **系统警告销售**："该客户此前 N 次提竞品价值得怀疑" |
+| < 20 | **专项黑名单** | 销售可提报 → 主管审批 → 进入**专项黑名单**（与普通黑名单分离） |
+
+**5.55.4 专项黑名单**
+
+- 与普通黑名单**分离**（普通黑名单影响留货/账期等；专项黑名单仅影响议价竞品采信）
+- 入名单必须由销售提报 + 销售主管审批 + 提供**完整证据日志**
+- 强制审计：`competitor_blacklist_log`（含证据链、审批人、有效期）
+- 默认 6 个月失效，可续
+
+**5.55.5 与议价 LLM 协同**
+
+议价 prompt 注入：
+```
+该客户对竞品 X家 的可信度评分：35（suspicious）
+历史：4 次提同价位未走 → 销售可适当强硬，但话术仍温和
+注意：不要直接说"您虚价"，用市场话术化解
+```
+
+### 5.56 Sales Level System（销售级别体系 - v14 新增）
+
+**5.56.1 级别定义**
+
+```yaml
+SalesLevel:
+  junior:   入职 ≤ 6 月 OR 业绩 P25 以下
+  mid:      入职 7~24 月 AND 业绩 P25~P75
+  senior:   入职 > 24 月 OR 业绩 P75 以上
+```
+
+**5.56.2 配额差异化**
+
+```yaml
+daily_new_lead_quota:
+  junior: 5
+  mid:    8
+  senior: 12
+```
+
+**5.56.3 入职时间衰减保底**
+
+```yaml
+newcomer_floor:
+  onboarding ≤ 3m:  0.15  # 必须 ≥ 15% 概率拿到工单
+  onboarding ≤ 6m:  0.10
+  onboarding ≤ 12m: 0.05
+  > 12m:            0.0   # 完全凭实力
+```
+
+**5.56.4 客户类型授权**
+
+```yaml
+customer_type_authorization:
+  junior:  [new, churn]                    # 新人优先练手
+  mid:     [new, volume, profit, churn]
+  senior:  全部 + strategic + vip
+```
+
+**5.56.5 升降级**
+
+- 季度自动评估业绩 + 入职时间 → 推荐升级（销售主管确认）
+- 降级慎重：连续 2 季度业绩 P25 以下 → 主管 review
+- 升降级落档案审计
+
+### 5.57 Machine-quotable SKU Whitelist（v14 新增）
+
+**5.57.1 数据模型**
+
+```yaml
+SKUWhitelistEntry:
+  sku_id (category + grade + spec + origin? + length?)
+  status: active | review_pending | retired
+  added_by, added_at, last_review_at
+  notes: "常态品种"
+  market_volatility: low | medium | high   # 行情波动度
+```
+
+**5.57.2 流程**
+
+```
+parse_inquiry 抽取 sku → 查 whitelist:
+  hit  → 走标准 Pricing 流程
+  miss → 触发 v10 NO_PRICING 转人工
+         附建议："该规格未在 SKU 白名单内，建议销售先报价 + 提报添加"
+```
+
+**5.57.3 维护**
+
+- 销售 / 业务部可提报"加入白名单"
+- 销售主管审批
+- 6 个月 review 一次（清理停售品种）
+- 行情极不稳定的 SKU 可临时移出 + 自动恢复定时
+
+**5.57.4 与替代料协同**
+
+替代料候选必须在白名单内（否则也无定价）；候选不在白名单的也走人工。
+
+### 5.58 Tool Registry（v14 增量）
+
+| 工具 | 入参 | 说明 |
+|---|---|---|
+| `get_config` | tenant_id, key | 读配置 |
+| `update_config` | tenant_id, key, new_value, reason | 改配置（带审计） |
+| `report_fake_competitor` | customer_id, competitor, evidence | 销售提报虚假竞品 |
+| `propose_customer_type_change` | customer_id, suggested_type, reason | 系统建议销售考虑改客户类型 |
+| `query_sku_whitelist` | sku_id | 查白名单 |
+| `add_sku_to_whitelist` | sku_id, justification | 提报加入白名单 |
+
+### 5.59 Storage（v14 新增表）
+
+| 表 | 用途 |
+|---|---|
+| `config_entry` | 配置主表（按 tenant + key） |
+| `config_change_log` | 配置变更审计 |
+| `customer_segment_history` | 客户细分变更 |
+| `sales_style_profile` | 销售话术风格 |
+| `competitor_credibility` | 竞品可信度（customer × competitor） |
+| `competitor_credibility_event` | 评分事件流 |
+| `competitor_blacklist_special` | 专项黑名单（议价层用） |
+| `sales_level_history` | 销售级别变更 |
+| `sku_whitelist` | 可机器报价 SKU 白名单 |
+| `customer_type_suggestion` | 系统给销售的客户类型建议 |
+| `ghost_score_amend_to_zero` | 改到 0 的客户行为记录（影响下次询价待遇） |
+
 ---
 
 ## 6. 钢铁贸易话术与体验（v7 增量）
@@ -3321,6 +3857,9 @@ HRB400 螺纹钢 Φ25 沙钢 50t
 | **M39 参数自调 + Drift（v12）** | Self-tuning Parameter Engine + 5 道防护栏 + Drift Monitor + A/B 实验框架 + 不学习目标白名单 |
 | **M40 幻觉防护层（v12）** | LLM 占位符强制 + 后置 DLP 数字扫描 + 渲染管道 + 应用前置审计；同时收口品类+规格全空走转人工 |
 | **M41 留货下单（v13）** | Reservation Engine + 定金规则 + 期限规则 + 过期工单 + 库存独占追踪 + Quote 生命周期 RESERVED 扩展 + 6.10 话术 + 业务 API 集成（submit/convert/extend/cancel + deposit webhook） |
+| **M42 Configuration Center（v14）** | 多租户配置存储 + 25+ 类配置项 + 版本化 + 审计 + 灰度发布 + 后台 UI + 热加载 |
+| **M43 客户细分 + 销售话术 + 竞品可信度（v14）** | Customer Segment + Order Profit Floor 按 segment 差异化 + Sales Style Profile + Competitor Credibility + 专项黑名单 |
+| **M44 销售级别 + SKU 白名单 + 学习参数收紧（v14）** | junior/mid/senior + 入职衰减保底 + 配额差异 + Machine-quotable SKU Whitelist + 学习冷启 60 + 双窗 + 30 天 A/B |
 
 ---
 
@@ -3381,6 +3920,14 @@ HRB400 螺纹钢 Φ25 沙钢 50t
 | **库存独占与 ERP 不同步**（v13） | 超卖或错卖 | 分钟级对账 + 差异告警 + 严重不一致暂停留货 |
 | **战略客户免定金被滥用**（v13） | 免定金留货过期成本公司承担 | 战略客户名单审批 + 单客户单日免定金上限 + 长期违约率监控 |
 | **客户反复留货 + 取消试探价格**（v13） | 浪费库存独占资源 | 客户取消率高 → ghost_score↑ → 留货被自动收紧（要定金/缩短期限） |
+| **配置中心改错值导致全系统行为变化**（v14） | 大面积错误 | 双人复核 + 灰度（5/20/100）+ 一键回滚 + business_floor 类型强制审计 |
+| **客户细分错分（dealer 误标 terminal）**（v14） | 毛利底线判错 → 报价错位 | 销售可手动校正；分类来源标 source；新客户冷启动期不自动分；变更走审计 |
+| **销售话术风格 LLM 偏移**（v14） | 客户感觉销售换人 | 风格档案变更走审计；客户感知差异告警；风格定制不绕过数字占位符 |
+| **竞品可信度被销售滥用打分**（v14） | 错杀客户 | 系统打分占主、销售提报需主管批 + 证据日志；专项黑名单与普通黑名单分离，权限分离 |
+| **专项黑名单审计日志缺失**（v14） | 客户纠纷无据可查 | 提报必含证据 ID + 时间戳 + 审批链；missing 任一字段一律拒绝入库 |
+| **学习冷启样本数 60 导致新客户长期走默认**（v14） | 新客体验差 | 用客户类型 + 地区 + 行业默认兜底；销售可手动覆盖默认值；冷启动期间客户偏好画像仍记录但不应用 |
+| **销售级别衰减算法错杀新人**（v14） | 新人接不到单 | 新人保底逐月衰减；季度复盘新人留存率；衰减规则可配置 |
+| **SKU 白名单覆盖不全**（v14） | 大量规格走人工拖慢响应 | 销售可一键提报；常用 SKU 自动巡检；批量导入工具；定期 review |
 | **OCR 单供应商风险**（v9） | 通义千问限流/故障时所有视觉能力受影响 | 企业级 SLA 配额；Qwen-VL-Max → Plus 内部降级；解析失败转人工 + 告警；演进项预留 DeepSeek-VL 应急备选 |
 | **Qwen-VL OCR 对非标准票据/手写识别下降**（v9） | 付款凭证关联订单错位 | 规则正则二次校验金额/卡号末四位；不唯一时反问客户；财务最终人工确认才落账 |
 | **DashScope 计费失控**（v9） | 视觉 token 量大费用飙升 | 文件 hash 缓存（同图不重复识别）；按客户 / 日 配额；图片预先压缩到合理分辨率；非询价/付款凭证场景一律不走 VL |
@@ -3618,3 +4165,46 @@ v13 新增（留货下单相关）：
 77. **留货过期前 1h 销售联系**是否要做硬性 KPI（销售必须接触客户）？
 
 继续保留 v3~v12 已有的问题（共 65 个累积，v13 后共 77 个累积）。
+
+---
+
+## 15.1 v14 决策状态（已确认 60 个；剩余待定）
+
+### 已确认（本次 v14）
+
+✅ v7（议价）#1~#8 共 8 个 → 详见 1.12.1
+✅ v8（改量）#1~#7 共 7 个 → 详见 1.12.2
+✅ v10（路由）#1~#15 共 15 个 → 详见 1.12.3
+✅ v11（替代料）#1~#9 共 9 个 → 详见 1.12.4
+✅ v12（学习+品类空）#1~#11 共 11 个 → 详见 1.12.5
+✅ v13（留货）#1~#12 共 12 个 → 详见 1.12.6
+
+合计 **62 个**待确认问题已转化为决策（已落实到对应模块 + Configuration Center 5.53）。
+
+### 剩余待定（来自 v3~v6）
+
+需求方尚未答复的 15 个早期问题（重新列出供后续确认）：
+
+1. **业务系统能否配合开发 Inbound Webhook**（quote.ready / settlement.created / payment.* / shipment.*）？
+2. **业务 API 是否支持以下操作**？
+   - 按客户+时间查留货订单
+   - 按客户查欠款汇总/明细
+   - 创建询价单（支持 v5 的 9 要素完整结构 + 批量）
+   - 按订单/车牌查装车重量
+   - 按炉号/订单查材质书 PDF
+   - 按客户+月份查结算单 PDF
+   - 提交付款凭证（写）
+   - 提交发货催办（写）
+3. 询价 ERP 报价流：销售逐 item 报价还是整单？
+4. 报价回推是否需要同时附 PDF 报价单？
+5. 询价 9 要素中，业务 API 接收时哪些必填？哪些可空？
+6. **客户偏好画像是 Bot 侧维护还是同步 CRM**？冲突时以谁为准？（v10 #1 已部分确认：可配置二选一）
+7. **运营是否需要 KB 维护后台**？谁来维护词典（销售运营 / 技术）？（v11 已部分确认：业务部）
+8. 多 sheet Excel 询价处理：默认询第一个 sheet？反问？
+9. 询价文件保留 1 年合规吗？
+10. **VL 模型预算（Qwen-VL 系列）**？月调用次数、每月预算上限、是否要按客户 / 日做 token 配额？
+11. 销售在 Bot 里 /reply 还是 ERP 里操作？
+12. 询价/催发货/付款核对 SLA 各是多少？（v10 #7/#8 已部分确认：5min ACK + 20min 回客户）
+13. 客户绑定方式：销售生成 token / 手机号短信 / 都要？
+14. 是否需要群聊场景？
+15. v12 #8 **LLM 占位符话术 review** —— 开发期任务，需求方提供 review 样例标准。
