@@ -1928,5 +1928,156 @@ quota_enforcement: soft（提示）| hard（限流）  # 可配
 | `quota_alert_log` | 配额告警 |
 | `erp_sync_log` | 自建能力与 ERP 同步/对账 |
 
+### 5.66 Price Composition Engine（报价构成引擎 - v16 核心）
+
+**5.66.1 报价构成数据模型**
+
+```yaml
+PriceComposition:
+  quote_line_id, sku
+  qty_ton
+
+  # 1) 基准货款
+  base:
+    unit_price: 3650            # 基准货款单价
+    cost_basis: actual_cost | list_price   # 按 segment（v14）
+    tax_rate: 0.13
+
+  # 2) 加工费
+  processing:
+    items:
+      - { type: 剪切,  rate_per_ton: 30, cost_per_ton: 18 }
+      - { type: 开平,  rate_per_ton: 50, cost_per_ton: 32 }
+    tax_rate_one_invoice: 0.13
+    tax_rate_two_invoice: 0.13   # 或 0.06（看加工服务定性）
+
+  # 3) 运输
+  delivery:
+    mode: 自提 | 送货上门 | 代送
+    freight_per_ton: 30          # 自提=0
+    freight_cost_per_ton: 22     # 我方实际成本
+    agent_service_fee: 0         # 代送服务费
+    tax_rate: 0.09
+
+  # 4) 结算/票据
+  settlement:
+    method: 现金 | 电汇 | 银行承兑 | 商业承兑
+    bill_term_months: 6
+    discount_rate_annual: 0.03   # 贴现率
+    discount_cost: ...           # = 票面 × rate × term
+
+  # 5) 账期资金成本
+  credit:
+    days: 30
+    finance_rate_annual: 0.08    # 资金成本率
+    finance_cost: ...            # = 货值 × rate × days/365
+
+  # 6) 开票方式
+  invoice:
+    mode: one_invoice | two_invoice
+    tax_diff_adjustment: ...     # 一票制税差补偿
+
+  # 输出
+  result:
+    pretax_subtotal: ...
+    tax_total: ...
+    total_with_tax: ...
+    unit_price_final: ...
+    full_cost: ...               # 全成本（成本红线用）
+    breakdown: [...]             # 逐项明细
+```
+
+**5.66.2 计算流程**
+
+```
+1. 基准货款 = base.unit_price × qty
+2. 加工费   = Σ processing.items.rate × qty
+3. 运费     = delivery.freight_per_ton × qty（自提=0）+ 代送服务费
+4. 贴现成本 = 票面 × discount_rate × (term_months/12)  （现金=0）
+5. 资金成本 = 货值 × finance_rate × (credit_days/365)   （现款=0）
+6. 税务计算：
+   - 一票制：全部并入 13% → 算税差补偿
+   - 两票制：货款 13% + 运费 9% + 加工 13%/6% 分别计税
+7. 全成本 = 货款成本 + 加工成本 + 运输成本 + 贴现成本 + 资金成本
+8. 报价单价 = (各项加总 + 税) / qty
+9. 校验：报价单价 ≥ 全成本 × (1 + min_margin_by_segment)
+```
+
+**5.66.3 一票/两票制税务计算**
+
+```python
+def calc_tax(comp):
+    if comp.invoice.mode == "one_invoice":
+        # 全部按 13% 开票
+        taxable = base + processing + freight
+        tax = taxable * 0.13
+        # 我方运费进项仅 9%，存在税差损失 → 补偿
+        freight_tax_loss = freight * (0.13 - 0.09)
+        tax_diff_adjustment = freight_tax_loss
+    else:  # two_invoice
+        tax = base*0.13 + freight*0.09 + processing*proc_rate
+        tax_diff_adjustment = 0
+    return tax, tax_diff_adjustment
+```
+
+**5.66.4 构成项作为让步货币（13 维）**
+
+| 让步维度 | 实现 |
+|---|---|
+| 加工费减免 | processing.rate 调减（不破加工成本红线） |
+| 现金价 | settlement 切现金 → discount_cost=0，等价让利 |
+| 账期优惠 | credit.days 调减 → finance_cost 减（注意与"给账期"反向） |
+| 一票转两票 | invoice.mode 切换 → 帮客户优化税务 |
+
+Counter-offer Generator（5.27）扩展这 4 维，按客户类型推荐。
+
+**5.66.5 配置项（Configuration Center）**
+
+```yaml
+price_composition:
+  processing_rates:        # 加工费率（按工序）
+    剪切: { rate_per_ton: 30, cost_per_ton: 18 }
+    开平: { rate_per_ton: 50, cost_per_ton: 32 }
+    纵剪: { rate_per_ton: 40, cost_per_ton: 25 }
+    折弯: { rate_per_process: 5 }
+  freight_table:           # 运费表（按距离/目的地）
+    武汉江夏: { per_ton: 30, cost: 22 }
+  discount_rates:          # 贴现率
+    银行承兑: 0.03
+    商业承兑: 0.05
+  finance_rate_annual: 0.08   # 资金成本率
+  tax_rates:
+    货物: 0.13
+    运输: 0.09
+    加工服务: 0.13
+  one_invoice_tax_compensation: true   # 一票制是否补偿税差
+```
+
+**5.66.6 与其他模块联动**
+
+| 模块 | 联动 |
+|---|---|
+| Pricing Strategy（5.18） | 策略作用于"基准货款"，构成引擎叠加其他项 |
+| Order Profit Optimizer（5.26） | 整单毛利按全成本核算（含加工/运输/贴现/资金） |
+| Counter-offer Generator（5.27） | 让步货币扩展 4 维 |
+| Interactive Quote Editor（5.61） | 报价单逐项展示构成 + 改构成即时重算 |
+| Customer Profile（5.17） | 学习客户常用：开票方式/结算方式/交付方式/常加工工序 |
+| Configuration Center（5.53） | 全部费率/税率/贴现率可配 |
+
+**5.66.7 客户偏好学习（与 v12 自我学习联动）**
+
+学（事实）：客户常用开票方式（一票/两票）、常用结算（现金/承兑）、常用交付（自提/送货）、常需加工工序
+不学：费率/税率/贴现率/资金成本率（这些是配置项，列入不学习白名单）
+
+**5.66.8 新增存储**
+
+| 表 | 用途 |
+|---|---|
+| `price_composition` | 每个报价行的构成明细 |
+| `processing_rate_config` | 加工费率配置 |
+| `freight_table_config` | 运费表 |
+| `discount_rate_config` | 贴现率配置 |
+| `customer_settlement_preference` | 客户结算/开票/交付偏好（学习） |
+
 ---
 
