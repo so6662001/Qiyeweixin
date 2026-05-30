@@ -2303,8 +2303,12 @@ SalesMeasurementMethod:
   price_unit: 元/吨 | 元/支 | 元/根 | 元/㎡ | 元/米
   quantity_unit: 吨 | 支 | 根 | ㎡ | 米 | 件 | 捆
   weight_basis: actual | theoretical | nameplate | none
-  show_ton_equivalent: true | false   # 是否展示折合吨
+  show_ton_equivalent: true | false   # v20: 是否展示折合吨（企业可配开关）
 ```
+
+> **v20 折合吨开关**：`show_ton_equivalent` 按企业（甚至企业×品类）配置。
+> - false：报价仅显示点支/按米/平方价（部分企业不愿暴露吨价）
+> - true：同时显示折合吨价（部分企业为竞争力展示）
 
 **5.69.2 企业配置矩阵**
 
@@ -2318,7 +2322,8 @@ tenant_category_measurement:
 ```
 
 - 存 Configuration Center（5.53），类型 = policy_rule
-- 业务部维护；不在 allowed 内的方式 → 系统禁用并提示
+- **由业务部管理人员维护**（v20）；不在 allowed 内的方式 → 系统禁用并提示
+- `show_ton_equivalent` 折合吨展示开关同在此配置（企业级，可细到品类）
 
 **5.69.3 计量 → 价格/数量计算**
 
@@ -2345,16 +2350,18 @@ def calc_amount(method, qty, unit_price, item):
 
 | 表 | 用途 |
 |---|---|
-| `theoretical_weight_table` | 理论单重（理计用，5.36 已有） |
-| `nameplate_weight_table` | 抄牌标称重量（抄牌用，v19 新增）|
+| `theoretical_weight_table` | 理论单重（理计用，5.36 已有）— **行业标准导入 + 企业可调（v20）** |
+| `nameplate_weight_table` | 抄牌标称重量（抄牌用，v19 新增）— **行业标准导入 + 企业可调（v20）** |
 
-**5.69.5 过磅预估 vs 磅单结算**
+**5.69.5 过磅预估 vs 磅单结算（v20 确认：一律以磅单为准）**
 
 ```
-下单（过磅方式）：按理论/历史估吨位 → 预估金额
+下单（过磅方式）：按理论/历史估吨位 → 预估金额（仅预估）
 发货过磅 → 实际吨位（v3 装车重量 / 磅单）
-结算：以磅单为准
-磅差处理：企业可配（磅差范围、超差是否复磅、超差责任）
+结算：【一律以磅单为准】（v20 决策）
+  - 报价/合同强制明示"以实际过磅为准"
+  - 不设复杂磅差分摊；最终金额 = 磅单吨位 × 单价
+  - 如需复磅由客户/销售线下发起（非系统自动）
 ```
 
 **5.69.6 与各模块联动**
@@ -2375,6 +2382,7 @@ def calc_amount(method, qty, unit_price, item):
 - 客户/销售选的计量方式必须在企业该品类 allowed 内
 - 不允许的方式 → 提示"本企业 H型钢仅支持抄牌/过磅"
 - 计量方式与品类不匹配（如螺纹按平方）→ 拦截 + 反问
+- **同一询价单允许各行不同计量方式（v20）**：每行按自己的计量方式独立计价；整单汇总按各行金额相加（折合吨汇总受 show_ton_equivalent 控制）
 
 **5.69.8 新增存储**
 
