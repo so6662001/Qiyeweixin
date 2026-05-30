@@ -2,7 +2,12 @@
 
 钢铁贸易行业 · 企业微信智能机器人项目。
 
-当前阶段：**设计阶段**（尚未开发）。设计文档 v24（七个深化决策确认）。全部 77 个待确认问题已确认。
+当前阶段：**设计阶段**（尚未开发）。设计文档 v24。全部待确认问题已确认。
+
+## 如何评估设计是否符合要求
+
+- **怕漏需求**？看 [`docs/TRACEABILITY.md`](./docs/TRACEABILITY.md)：把你从第一句话到现在提的 **84 项需求**逐条列出，对照设计覆盖位置，证明无遗漏。
+- **怕做出来不对**？看 [`docs/ACCEPTANCE.md`](./docs/ACCEPTANCE.md)：每个能力的**量化达标线** + **20 个端到端验收场景**（给定输入→期望输出）+ **防错红线**（幻觉/赔本/越权/误替代必须 0 发生）。
 
 ## v23 七个深化决策（v24 确认）
 
@@ -104,6 +109,8 @@
 | [`docs/dialogues.md`](./docs/dialogues.md) | 第 6 章 钢铁贸易话术与体验 |
 | [`docs/operations.md`](./docs/operations.md) | 第 7~11 章 安全合规 / 可观测 / 部署 / 里程碑（M1~M47）/ 风险 |
 | [`docs/appendix.md`](./docs/appendix.md) | 第 14 章 议价场景样例附录 |
+| [`docs/TRACEABILITY.md`](./docs/TRACEABILITY.md) | **需求溯源矩阵**：84 项需求逐条对照设计，证明无遗漏 |
+| [`docs/ACCEPTANCE.md`](./docs/ACCEPTANCE.md) | **验收标准与验收用例**：量化 KPI + 20 个端到端 UAT 场景 + 防错红线 |
 
 ## 一句话方案
 

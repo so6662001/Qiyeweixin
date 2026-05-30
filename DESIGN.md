@@ -50,6 +50,8 @@
 > - [`docs/dialogues.md`](docs/dialogues.md) — 第 6 章 钢铁贸易话术与体验
 > - [`docs/operations.md`](docs/operations.md) — 第 7~11 章 安全合规 / 可观测 / 部署 / 里程碑 / 风险
 > - [`docs/appendix.md`](docs/appendix.md) — 第 14 章 议价场景样例附录
+> - [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md) — **需求溯源矩阵**（84 项需求逐条对照设计，证明无遗漏）
+> - [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md) — **验收标准与验收用例**（量化 KPI + 20 个端到端 UAT 场景 + 防错红线）
 
 ## 0. 需求方已确认的关键约束
 
