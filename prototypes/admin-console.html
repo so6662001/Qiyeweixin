@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>管理后台 · 企业配置中心</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#f0f2f5;color:#1a1a2e;}
+  .back{position:fixed;top:14px;left:16px;color:#2e7cf6;text-decoration:none;font-size:13px;z-index:10;background:#fff;padding:6px 12px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.08);}
+  .layout{display:flex;min-height:100vh;}
+  .side{width:220px;background:#0f3057;color:#cfd8e3;padding:20px 0;flex-shrink:0;}
+  .side .logo{padding:0 22px 20px;font-size:16px;font-weight:700;color:#fff;border-bottom:1px solid rgba(255,255,255,.1);margin-bottom:12px;}
+  .side .tenant{padding:0 22px;font-size:11.5px;color:#8aa0bb;margin-bottom:16px;}
+  .side .nav-i{padding:11px 22px;font-size:13.5px;display:flex;align-items:center;gap:10px;cursor:pointer;}
+  .side .nav-i.on{background:rgba(46,124,246,.25);color:#fff;border-left:3px solid #2e7cf6;}
+  .side .grp{padding:14px 22px 6px;font-size:10.5px;color:#5f7390;text-transform:uppercase;letter-spacing:1px;}
+  .main{flex:1;padding:64px 32px 40px;overflow:auto;}
+  .h1{font-size:20px;font-weight:700;color:#0f3057;margin-bottom:4px;}
+  .sub{font-size:13px;color:#6b7280;margin-bottom:22px;}
+  .panel{background:#fff;border-radius:12px;padding:22px;margin-bottom:20px;box-shadow:0 1px 8px rgba(15,48,87,.06);}
+  .panel h3{font-size:15px;margin-bottom:4px;color:#0f3057;display:flex;justify-content:space-between;align-items:center;}
+  .panel .pd{font-size:12px;color:#999;margin-bottom:16px;}
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid #f0f2f5;}
+  th{color:#888;font-weight:500;font-size:12px;background:#fafbfc;}
+  .chip{display:inline-block;font-size:11px;padding:2px 9px;border-radius:10px;margin:2px 3px 2px 0;}
+  .c-on{background:#e7f7ec;color:#07a850;}
+  .c-off{background:#f0f2f5;color:#aaa;}
+  .c-def{background:#eef0ff;color:#5b6cf0;}
+  .toggle{width:38px;height:22px;background:#07c160;border-radius:11px;position:relative;display:inline-block;}
+  .toggle::after{content:"";width:18px;height:18px;background:#fff;border-radius:50%;position:absolute;top:2px;right:2px;}
+  .toggle.off{background:#d0d4da;}
+  .toggle.off::after{right:auto;left:2px;}
+  .badge{font-size:11px;padding:2px 9px;border-radius:10px;background:#fff4e5;color:#f59e0b;}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:20px;}
+  .stat{background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 8px rgba(15,48,87,.06);}
+  .stat .v{font-size:24px;font-weight:700;color:#2e7cf6;}
+  .stat .l{font-size:12px;color:#999;margin-top:4px;}
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px;}
+  .rollout{display:flex;gap:8px;align-items:center;font-size:12px;color:#888;margin-top:10px;}
+  .rollout .ph{padding:3px 10px;border-radius:10px;background:#f0f4ff;color:#2e7cf6;}
+  .num-input{width:64px;border:1px solid #d0d4da;border-radius:6px;padding:5px 8px;font-size:13px;}
+</style>
+</head>
+<body>
+  <a class="back" href="index.html">← 返回原型导航</a>
+  <div class="layout">
+    <div class="side">
+      <div class="logo">⚙️ 钢贸配置中心</div>
+      <div class="tenant">租户：沙钢贸易（华中）<br>多租户 SaaS · 标准版套餐</div>
+      <div class="grp">业务规则</div>
+      <div class="nav-i on">📏 计量方式配置</div>
+      <div class="nav-i">💰 报价策略</div>
+      <div class="nav-i">🎁 促销优惠</div>
+      <div class="nav-i">📌 留货/定金规则</div>
+      <div class="nav-i">🔄 替代料规则</div>
+      <div class="grp">销售运营</div>
+      <div class="nav-i">🧭 销售路由/评分</div>
+      <div class="nav-i">👥 客户画像</div>
+      <div class="nav-i">📨 自动跟进</div>
+      <div class="grp">智能/平台</div>
+      <div class="nav-i">🧠 自我学习参数</div>
+      <div class="nav-i">📦 SKU 白名单</div>
+      <div class="nav-i">💳 套餐/配额</div>
+    </div>
+
+    <div class="main">
+      <div class="h1">计量方式配置（按品类）</div>
+      <div class="sub">配置本企业各品类允许的销售计量方式。由业务部管理人员维护，支持灰度发布。</div>
+
+      <div class="panel">
+        <h3>品类 × 计量方式 矩阵 <span class="badge">业务部维护</span></h3>
+        <div class="pd">绿色=允许 · 蓝色=默认 · 灰色=禁用。不在允许内的方式系统自动拦截并提示客户。</div>
+        <table>
+          <tr><th>品类</th><th>过磅</th><th>点支</th><th>理计</th><th>平方</th><th>按米</th><th>抄牌</th><th>折合吨展示</th></tr>
+          <tr><td><b>螺纹钢</b></td><td><span class="chip c-def">默认</span></td><td><span class="chip c-off">禁</span></td><td><span class="chip c-off">禁</span></td><td><span class="chip c-off">—</span></td><td><span class="chip c-off">—</span></td><td><span class="chip c-off">禁</span></td><td><span class="toggle"></span></td></tr>
+          <tr><td><b>H型钢</b></td><td><span class="chip c-on">允许</span></td><td><span class="chip c-off">禁</span></td><td><span class="chip c-off">—</span></td><td><span class="chip c-off">—</span></td><td><span class="chip c-off">—</span></td><td><span class="chip c-def">默认</span></td><td><span class="toggle off"></span></td></tr>
+          <tr><td><b>无缝管</b></td><td><span class="chip c-on">允许</span></td><td><span class="chip c-on">允许</span></td><td><span class="chip c-def">默认</span></td><td><span class="chip c-off">—</span></td><td><span class="chip c-on">允许</span></td><td><span class="chip c-off">—</span></td><td><span class="toggle"></span></td></tr>
+          <tr><td><b>中厚板</b></td><td><span class="chip c-def">默认</span></td><td><span class="chip c-off">—</span></td><td><span class="chip c-off">—</span></td><td><span class="chip c-on">允许</span></td><td><span class="chip c-off">—</span></td><td><span class="chip c-off">—</span></td><td><span class="toggle"></span></td></tr>
+        </table>
+        <div class="rollout">灰度发布：<span class="ph">5% ✓</span><span class="ph">20% ✓</span><span class="ph" style="background:#fff4e5;color:#f59e0b;">100% 进行中</span>· 变更需二人复核</div>
+      </div>
+
+      <div class="grid2">
+        <div class="panel">
+          <h3>负差交易约定（按品类）</h3>
+          <div class="pd">v22：企业按品类配置。</div>
+          <table>
+            <tr><th>品类</th><th>约定模式</th><th>负差让利</th></tr>
+            <tr><td>螺纹钢</td><td>负差让利</td><td>¥20/吨</td></tr>
+            <tr><td>H型钢</td><td>理论计价</td><td>—</td></tr>
+            <tr><td>无缝管</td><td>过磅实称</td><td>—</td></tr>
+          </table>
+        </div>
+        <div class="panel">
+          <h3>拆捆 / 余尺（按品类）</h3>
+          <div class="pd">余尺：企业设默认 + 销售单据级可调。</div>
+          <table>
+            <tr><th>品类</th><th>拆捆</th><th>拆捆费</th><th>余尺默认</th></tr>
+            <tr><td>螺纹钢</td><td>不允许</td><td>—</td><td>按定尺</td></tr>
+            <tr><td>型钢</td><td>允许</td><td>¥30/吨</td><td>余尺让利</td></tr>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>整单毛利底线（按客户细分）</h3>
+        <div class="pd">v14/v16：报价/议价全成本红线兜底，按 segment 差异。</div>
+        <table>
+          <tr><th>客户细分</th><th>成本基线</th><th>毛利底线</th><th>不锈钢修正</th></tr>
+          <tr><td>下级经销商</td><td>挂牌价</td><td><input class="num-input" value="10"> 元/吨</td><td>×1.5</td></tr>
+          <tr><td>终端企业</td><td>实际成本</td><td><input class="num-input" value="200"> 元/吨</td><td>×1.5</td></tr>
+        </table>
+      </div>
+
+      <div class="h1" style="margin-top:30px;">需求覆盖与验收看板</div>
+      <div class="sub">实时核对设计覆盖度与验收进度。</div>
+      <div class="stats">
+        <div class="stat"><div class="v">84</div><div class="l">原子需求（全覆盖 ✅）</div></div>
+        <div class="stat"><div class="v">59</div><div class="l">里程碑 M1~M59</div></div>
+        <div class="stat"><div class="v">20</div><div class="l">端到端 UAT 场景</div></div>
+        <div class="stat"><div class="v">0</div><div class="l">防错红线触发（目标）</div></div>
+      </div>
+
+    </div>
+  </div>
+</body>
+</html>

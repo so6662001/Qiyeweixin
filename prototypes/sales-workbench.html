@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>销售端 · 企业微信工作台</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#e9edf2;color:#1a1a2e;padding:30px 20px 60px;}
+  .back{color:#2e7cf6;text-decoration:none;font-size:13px;}
+  .page-title{max-width:1200px;margin:8px auto;font-size:22px;color:#0f3057;font-weight:700;}
+  .page-sub{max-width:1200px;margin:0 auto 24px;font-size:13px;color:#6b7280;}
+  .stage{display:flex;flex-wrap:wrap;gap:24px;max-width:1280px;margin:0 auto;justify-content:center;}
+  .phone{width:350px;background:#f0f2f5;border-radius:26px;overflow:hidden;box-shadow:0 10px 30px rgba(15,48,87,.18);border:8px solid #1a1a2e;display:flex;flex-direction:column;}
+  .wx-nav{background:#2e7cf6;color:#fff;padding:12px 14px;display:flex;align-items:center;gap:8px;}
+  .wx-nav .title{flex:1;text-align:center;font-size:15px;font-weight:600;}
+  .scene-label{background:#7c3aed;color:#fff;font-size:12px;padding:6px 12px;text-align:center;}
+  .body{flex:1;overflow:auto;padding:12px;min-height:480px;background:#ededed;}
+  /* 企业微信文本卡片 */
+  .tcard{background:#fff;border-radius:10px;overflow:hidden;margin-bottom:12px;box-shadow:0 1px 4px rgba(0,0,0,.06);}
+  .tcard .h{padding:11px 14px;font-size:14px;font-weight:600;border-bottom:1px solid #f0f0f0;display:flex;justify-content:space-between;align-items:center;}
+  .tcard .b{padding:12px 14px;font-size:12.5px;line-height:1.7;color:#333;}
+  .kv{display:flex;justify-content:space-between;padding:2px 0;}
+  .kv .k{color:#888;}
+  .price{color:#e54848;font-weight:700;}
+  .tag{font-size:10.5px;padding:1px 7px;border-radius:8px;}
+  .t-warn{background:#fff4e5;color:#f59e0b;}
+  .t-risk{background:#ffeaea;color:#e54848;}
+  .t-ok{background:#e7f7ec;color:#07a850;}
+  .t-vip{background:#fdf0ff;color:#a855f7;}
+  .profile{background:#f6f8fa;border-radius:8px;padding:8px 10px;font-size:11.5px;margin:8px 0;line-height:1.7;}
+  .option{border:1px solid #eef1f6;border-radius:8px;padding:9px 10px;margin-bottom:7px;font-size:12px;}
+  .option.rec{border-color:#2e7cf6;background:#f5f8ff;}
+  .option .ot{display:flex;justify-content:space-between;font-weight:500;}
+  .option .od{color:#888;font-size:11px;margin-top:3px;}
+  .actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px;}
+  .actions button{border:none;border-radius:8px;padding:9px 12px;font-size:12.5px;font-weight:600;flex:1;}
+  .a1{background:#2e7cf6;color:#fff;}
+  .a2{background:#f0f4ff;color:#2e7cf6;}
+  .a3{background:#fbeaea;color:#e54848;}
+  /* leaderboard */
+  .lb-item{display:flex;align-items:center;gap:10px;background:#fff;border-radius:10px;padding:10px 12px;margin-bottom:8px;box-shadow:0 1px 4px rgba(0,0,0,.05);}
+  .lb-rank{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;color:#fff;}
+  .lb-1{background:#f5b301;} .lb-2{background:#a0a0a0;} .lb-3{background:#cd7f32;} .lb-n{background:#d0d4da;}
+  .lb-info{flex:1;}
+  .lb-info .n{font-size:13.5px;font-weight:500;}
+  .lb-info .m{font-size:11px;color:#999;}
+  .lb-score{font-size:15px;font-weight:700;color:#2e7cf6;}
+  .bar{height:5px;background:#eef1f6;border-radius:3px;margin-top:4px;overflow:hidden;}
+  .bar i{display:block;height:100%;background:#2e7cf6;}
+  .prob{font-size:11px;color:#07a850;}
+</style>
+</head>
+<body>
+  <a class="back" href="index.html">← 返回原型导航</a>
+  <div class="page-title">销售端 · 企业微信工作台</div>
+  <div class="page-sub">销售在企业微信里接收工单（文本卡片/模板卡片）。系统提供客户画像 + 建议方案，销售一键确认或调整。含议价方案、团队竞争 Leaderboard、留货到期提醒。</div>
+
+  <div class="stage">
+
+    <!-- 询价工单 -->
+    <div class="phone">
+      <div class="wx-nav"><span>‹</span><div class="title">钢贸助手·工单</div><span>⋯</span></div>
+      <div class="scene-label">询价工单（含客户画像 + 系统建议）</div>
+      <div class="body">
+        <div class="tcard">
+          <div class="h">🔔 新询价转您处理 <span class="tag t-warn">SLA 20min</span></div>
+          <div class="b">
+            <div class="kv"><span class="k">客户</span><span>武汉建工 张总</span></div>
+            <div class="kv"><span class="k">询价</span><span>螺纹Φ25 沙钢 200t 送武汉</span></div>
+            <div class="kv"><span class="k">触发</span><span class="tag t-warn">库存不足(可发150t)</span></div>
+            <div class="profile">
+              👤 <b>客户画像</b>：量型 · 普通 · 信用正常<br>
+              转化率 65% · 月均 80t · DSO 45天<br>
+              ⚠️ Ghost 0.32（偶尔比价）· 段位：下级经销商<br>
+              🔗 粘性：上次小张服务（28天内）
+            </div>
+            <div style="font-weight:600;margin-bottom:6px;">系统建议方案：</div>
+            <div class="option rec">
+              <div class="ot"><span>A 拆批（推荐）</span><span class="price">¥3,810</span></div>
+              <div class="od">150t立发 + 50t调货5-7天</div>
+            </div>
+            <div class="option">
+              <div class="ot"><span>B 永钢替代补足</span><span class="price">¥3,795</span></div>
+              <div class="od">沙钢150t+永钢50t（同档异厂）</div>
+            </div>
+            <div class="actions"><button class="a1">发方案A</button><button class="a2">调整</button><button class="a3">转同事</button></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 议价方案 -->
+    <div class="phone">
+      <div class="wx-nav"><span>‹</span><div class="title">钢贸助手·议价</div><span>⋯</span></div>
+      <div class="scene-label">议价方案确认（让步预算 + 竞品标注）</div>
+      <div class="body">
+        <div class="tcard">
+          <div class="h">💬 客户议价（第2轮）</div>
+          <div class="b">
+            <div class="kv"><span class="k">客户出价</span><span class="price">¥3,780（砍¥40）</span></div>
+            <div class="kv"><span class="k">原报价</span><span>¥3,820</span></div>
+            <div class="kv"><span class="k">让步预算</span><span>剩 ¥45/吨</span></div>
+            <div class="kv"><span class="k">整单毛利底线</span><span>终端 ¥200/吨</span></div>
+            <div class="profile">
+              🔍 竞品标注：客户称"X家3780"<br>
+              ⚠️ 该客户半年4次提同价位<b>均成交于我方</b>（可信度35）
+            </div>
+            <div style="font-weight:600;margin:6px 0;">建议方案（话术已防幻觉）：</div>
+            <div class="option rec"><div class="ot"><span>A 让¥15+锁价48h</span><span class="price">¥3,805</span></div><div class="od">递减让步，保毛利</div></div>
+            <div class="option"><div class="ot"><span>B 让¥10+免运费</span><span>等价¥3,775</span></div><div class="od">运费让步替代降价</div></div>
+            <div class="option"><div class="ot"><span>C 换永钢替代</span><span>省¥25</span></div><div class="od">不动主价，毛利反增</div></div>
+            <div class="actions"><button class="a1">发方案A</button><button class="a2">自定义</button><button class="a3">转人工</button></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Leaderboard -->
+    <div class="phone">
+      <div class="wx-nav"><span>‹</span><div class="title">团队排行 · 本月</div><span>⋯</span></div>
+      <div class="scene-label">销售竞争 Leaderboard + 中签概率</div>
+      <div class="body">
+        <div class="tcard">
+          <div class="h">🏆 团队评分排行 <span class="tag t-ok">实时</span></div>
+          <div class="b" style="padding:10px;">
+            <div class="lb-item"><div class="lb-rank lb-1">1</div><div class="lb-info"><div class="n">王伟 <span class="tag t-vip">VIP可接</span></div><div class="m">转化72% · 月280t · 配额12</div><div class="bar"><i style="width:92%"></i></div></div><div class="lb-score">92</div></div>
+            <div class="lb-item"><div class="lb-rank lb-2">2</div><div class="lb-info"><div class="n">小张（我）</div><div class="m">转化65% · 月210t · <span class="prob">中签概率35%</span></div><div class="bar"><i style="width:81%"></i></div></div><div class="lb-score">81</div></div>
+            <div class="lb-item"><div class="lb-rank lb-3">3</div><div class="lb-info"><div class="n">李娜</div><div class="m">转化58% · 月160t</div><div class="bar"><i style="width:75%"></i></div></div><div class="lb-score">75</div></div>
+            <div class="lb-item"><div class="lb-rank lb-n">4</div><div class="lb-info"><div class="n">新人·赵磊 <span class="tag t-warn">保底15%</span></div><div class="m">入职2月 · 学习中</div><div class="bar"><i style="width:60%"></i></div></div><div class="lb-score">60</div></div>
+          </div>
+        </div>
+        <div class="tcard"><div class="b" style="font-size:11.5px;color:#888;">温度参数 T=1.0（中等差异化）· 优秀销售拿大头但新人保底 · 拒单率上限10%</div></div>
+      </div>
+    </div>
+
+    <!-- 留货到期提醒 -->
+    <div class="phone">
+      <div class="wx-nav"><span>‹</span><div class="title">钢贸助手·提醒</div><span>⋯</span></div>
+      <div class="scene-label">留货到期提醒（T-1h 销售关怀 KPI）</div>
+      <div class="body">
+        <div class="tcard">
+          <div class="h">⚠️ 留货即将过期 <span class="tag t-risk">剩1h</span></div>
+          <div class="b">
+            <div class="kv"><span class="k">客户</span><span>武汉建工 张总</span></div>
+            <div class="kv"><span class="k">留货</span><span>RES-001 螺纹Φ25 50t</span></div>
+            <div class="kv"><span class="k">锁价</span><span>¥3,820（市价¥3,850）</span></div>
+            <div class="kv"><span class="k">批次</span><span>#B2403 已锁定</span></div>
+            <div class="profile">💡 客户已得益 ¥30/吨 · 建议电话确认能否转单<br>过期将释放库存 + 扣定金50%(¥9,550)</div>
+            <div class="actions"><button class="a1">已联系客户</button><button class="a2">客户要延期</button><button class="a3">客户放弃</button></div>
+          </div>
+        </div>
+        <div class="tcard">
+          <div class="h">📨 自动跟进建议</div>
+          <div class="b" style="font-size:12px;color:#555;">客户张总月初常补货，系统建议今日联系。话术已按您个人风格生成：<br><span style="background:#f6f8fa;display:block;padding:8px;border-radius:6px;margin-top:6px;">"张总月初好～看您往常这时候补货，这月螺纹稳，要不要先锁一车？"</span></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</body>
+</html>

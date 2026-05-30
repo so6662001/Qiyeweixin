@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>客户端 · 微信对话全流程</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#e9edf2;color:#1a1a2e;padding:30px 20px 60px;}
+  .page-title{max-width:1200px;margin:0 auto 8px;font-size:22px;color:#0f3057;font-weight:700;}
+  .page-sub{max-width:1200px;margin:0 auto 24px;font-size:13px;color:#6b7280;}
+  .back{color:#2e7cf6;text-decoration:none;font-size:13px;}
+  .stage{display:flex;flex-wrap:wrap;gap:24px;max-width:1280px;margin:0 auto;justify-content:center;}
+  /* phone */
+  .phone{width:340px;background:#ededed;border-radius:26px;overflow:hidden;box-shadow:0 10px 30px rgba(15,48,87,.18);border:8px solid #1a1a2e;}
+  .nav{background:#ededed;border-bottom:1px solid #d9d9d9;padding:12px 14px;display:flex;align-items:center;gap:8px;position:relative;}
+  .nav .title{flex:1;text-align:center;font-size:15px;font-weight:600;}
+  .nav .title small{display:block;font-size:10px;color:#888;font-weight:400;}
+  .nav .ic{font-size:16px;color:#333;}
+  .scene-label{background:#0f3057;color:#fff;font-size:12px;padding:6px 12px;text-align:center;}
+  .chat{padding:14px 12px;min-height:420px;display:flex;flex-direction:column;gap:14px;background:#ededed;}
+  .time{text-align:center;font-size:11px;color:#999;}
+  .row{display:flex;gap:8px;align-items:flex-start;}
+  .row.me{flex-direction:row-reverse;}
+  .av{width:34px;height:34px;border-radius:6px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:16px;color:#fff;}
+  .av.bot{background:#07c160;}
+  .av.user{background:#576b95;}
+  .bubble{max-width:230px;padding:9px 12px;border-radius:8px;font-size:13.5px;line-height:1.55;position:relative;word-break:break-word;}
+  .bubble.bot{background:#fff;}
+  .bubble.me{background:#95ec69;}
+  .bubble.full{max-width:250px;}
+  .card{background:#fff;border-radius:10px;max-width:258px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.06);}
+  .card .ch{padding:10px 12px;border-bottom:1px solid #f0f0f0;font-weight:600;font-size:13.5px;display:flex;justify-content:space-between;align-items:center;}
+  .card .cb{padding:10px 12px;font-size:12.5px;line-height:1.7;color:#333;}
+  .kv{display:flex;justify-content:space-between;gap:8px;padding:2px 0;}
+  .kv .k{color:#888;}
+  .kv .v{font-weight:500;text-align:right;}
+  .tag{font-size:10.5px;padding:1px 6px;border-radius:8px;}
+  .t-said{background:#e7f7ec;color:#07a850;}
+  .t-auto{background:#fff4e5;color:#f59e0b;}
+  .t-calc{background:#eef0ff;color:#5b6cf0;}
+  .t-ok{background:#e7f7ec;color:#07a850;}
+  .t-miss{background:#ffeaea;color:#e54848;}
+  .menu{background:#fff;border-radius:10px;max-width:258px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.06);}
+  .menu .mh{padding:9px 12px;font-size:12.5px;color:#576b95;border-bottom:1px solid #f0f0f0;}
+  .menu .mi{padding:10px 12px;font-size:13px;color:#576b95;border-bottom:1px solid #f5f5f5;}
+  .menu .mi:last-child{border-bottom:none;}
+  .menu .mt{padding:8px 12px;font-size:11px;color:#aaa;}
+  .pdf{display:flex;align-items:center;gap:8px;background:#fff;padding:8px 10px;border-radius:8px;max-width:200px;box-shadow:0 1px 4px rgba(0,0,0,.06);}
+  .pdf .picon{width:34px;height:40px;background:#e74c3c;border-radius:4px;color:#fff;font-size:9px;display:flex;align-items:center;justify-content:center;font-weight:700;}
+  .pdf small{font-size:11px;color:#999;}
+  .price{color:#e54848;font-weight:700;}
+  .voice{background:#95ec69;border-radius:8px;padding:9px 14px;font-size:13px;display:flex;align-items:center;gap:8px;max-width:140px;}
+  .hr{height:1px;background:#f0f0f0;margin:6px 0;}
+  .note{font-size:11.5px;color:#f59e0b;background:#fff8ee;padding:6px 8px;border-radius:6px;margin-top:4px;}
+  .btn-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;}
+  .mini-btn{font-size:11.5px;border:1px solid #07c160;color:#07c160;border-radius:14px;padding:3px 10px;background:#fff;}
+  .mini-btn.p{background:#07c160;color:#fff;}
+</style>
+</head>
+<body>
+  <a class="back" href="index.html">← 返回原型导航</a>
+  <div class="page-title">客户端 · 微信对话全流程</div>
+  <div class="page-sub">外部客户在微信里与「钢贸客服」对话。覆盖询价解析、报价投递、多规格库存、议价、改量、替代料、留货、语音、转人工、自动跟进。</div>
+
+  <div class="stage">
+
+    <!-- 1. 询价 + 9要素解析 -->
+    <div class="phone">
+      <div class="nav"><span class="ic">‹</span><div class="title">沙钢贸易·小钢助手<small>微信客服</small></div><span class="ic">⋯</span></div>
+      <div class="scene-label">① 文字询价 → 9 要素解析回显</div>
+      <div class="chat">
+        <div class="time">今天 09:12</div>
+        <div class="row me"><div class="av user">张</div><div class="bubble me">要50吨螺四 25 沙钢的 送武汉</div></div>
+        <div class="row"><div class="av bot">钢</div>
+          <div class="card">
+            <div class="ch">📋 已解析您的询价 <span class="tag t-ok">置信度 93%</span></div>
+            <div class="cb">
+              <div class="kv"><span class="k">品类</span><span class="v">螺纹钢 <span class="tag t-said">✏️您说的</span></span></div>
+              <div class="kv"><span class="k">牌号</span><span class="v">HRB400 <span class="tag t-said">✏️"螺四"</span></span></div>
+              <div class="kv"><span class="k">规格</span><span class="v">Φ25mm <span class="tag t-said">✏️</span></span></div>
+              <div class="kv"><span class="k">产地</span><span class="v">沙钢 <span class="tag t-said">✏️</span></span></div>
+              <div class="kv"><span class="k">数量</span><span class="v">50 吨 <span class="tag t-said">✏️</span></span></div>
+              <div class="kv"><span class="k">目的地</span><span class="v">武汉 <span class="tag t-said">✏️</span></span></div>
+              <div class="hr"></div>
+              <div class="kv"><span class="k">长度</span><span class="v">12米 <span class="tag t-auto">🤖默认</span></span></div>
+              <div class="kv"><span class="k">标准</span><span class="v">GB/T1499.2 <span class="tag t-auto">🤖国标</span></span></div>
+              <div class="kv"><span class="k">计量</span><span class="v">过磅 <span class="tag t-auto">🤖本企业默认</span></span></div>
+              <div class="note">长度按您历史习惯默认 12 米，如需调整请回复</div>
+            </div>
+          </div>
+        </div>
+        <div class="row"><div class="av bot">钢</div><div class="bubble bot">信息齐全，正在为您报价…</div></div>
+      </div>
+    </div>
+
+    <!-- 2. 报价投递 -->
+    <div class="phone">
+      <div class="nav"><span class="ic">‹</span><div class="title">沙钢贸易·小钢助手<small>微信客服</small></div><span class="ic">⋯</span></div>
+      <div class="scene-label">② 报价投递（摘要+构成+PDF+菜单）</div>
+      <div class="chat">
+        <div class="row"><div class="av bot">钢</div>
+          <div class="card">
+            <div class="ch">💰 报价单 Q-20260530-001</div>
+            <div class="cb">
+              <div>螺纹钢 HRB400 Φ25 沙钢 武汉到货</div>
+              <div class="hr"></div>
+              <div class="kv"><span class="k">基准货款</span><span class="v">¥3,650/吨 ×50t</span></div>
+              <div class="kv"><span class="k">加工费(剪切)</span><span class="v">¥30/吨</span></div>
+              <div class="kv"><span class="k">运费(送货)</span><span class="v">¥30/吨</span></div>
+              <div class="kv"><span class="k">税(13%一票制)</span><span class="v">含</span></div>
+              <div class="hr"></div>
+              <div class="kv"><span class="k">含税单价</span><span class="v price">¥4,192/吨</span></div>
+              <div class="kv"><span class="k">含税合计</span><span class="v price">¥209,615</span></div>
+              <div class="kv"><span class="k">结算</span><span class="v">现款（最优）</span></div>
+              <div class="kv"><span class="k">有效期</span><span class="v">48 小时</span></div>
+              <div class="note">💡 计量按过磅，以实际磅单为准</div>
+            </div>
+          </div>
+        </div>
+        <div class="row"><div class="av bot">钢</div><div class="pdf"><div class="picon">PDF</div><div><div style="font-size:12.5px;">报价单Q-001.pdf</div><small>128 KB · 点击查看</small></div></div></div>
+        <div class="row"><div class="av bot">钢</div>
+          <div class="menu">
+            <div class="mh">请选择您的操作：</div>
+            <div class="mi">① 接受下单</div>
+            <div class="mi">② 申请留货</div>
+            <div class="mi">③ 我要议价</div>
+            <div class="mi">④ 修改数量</div>
+            <div class="mi">⑤ 转人工</div>
+            <div class="mt">也可直接回复：便宜点 / 第3行改80吨 / 要现金价</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3. 多规格库存反馈 -->
+    <div class="phone">
+      <div class="nav"><span class="ic">‹</span><div class="title">沙钢贸易·小钢助手<small>微信客服</small></div><span class="ic">⋯</span></div>
+      <div class="scene-label">③ 多规格组合询价 → 库存即时反馈</div>
+      <div class="chat">
+        <div class="row me"><div class="av user">张</div><div class="bubble me">螺纹Φ25 50吨、中板12mm 100吨、H型钢HW200 20吨 都有货吗</div></div>
+        <div class="row"><div class="av bot">钢</div>
+          <div class="card">
+            <div class="ch">📦 库存即时核查</div>
+            <div class="cb">
+              <div class="kv"><span class="k">①螺纹Φ25 50t</span><span class="v"><span class="tag t-ok">✅充足</span></span></div>
+              <div class="kv"><span class="k">②中板12mm 100t</span><span class="v"><span class="tag t-auto">⚠️仅60t</span></span></div>
+              <div class="kv"><span class="k">③H型钢HW200 20t</span><span class="v"><span class="tag t-miss">❌无货</span></span></div>
+              <div class="hr"></div>
+              <div style="font-size:12px;color:#666;">②差40t：可调货5-7天 / 拼仓<br>③可用宝钢替代（同档），马钢需订货</div>
+            </div>
+          </div>
+        </div>
+        <div class="row"><div class="av bot">钢</div><div class="bubble bot">①已有货先给您报价，②③ 您看怎么处理？</div></div>
+        <div class="row me"><div class="av user">张</div><div class="bubble me">①先报，③用宝钢替代</div></div>
+      </div>
+    </div>
+
+    <!-- 4. 议价 -->
+    <div class="phone">
+      <div class="nav"><span class="ic">‹</span><div class="title">销售·小张<small>企业微信</small></div><span class="ic">⋯</span></div>
+      <div class="scene-label">④ 多轮议价（让步货币 13 维）</div>
+      <div class="chat">
+        <div class="row me"><div class="av user">张</div><div class="bubble me">3780 我才下</div></div>
+        <div class="row"><div class="av bot">张</div><div class="bubble bot full">张总，沙钢这批拿货成本就在那儿。我帮您让 ¥15 到 <b class="price">¥3,805</b>，锁价也帮您拉到 48 小时</div></div>
+        <div class="row me"><div class="av user">张</div><div class="bubble me">还能再便宜不</div></div>
+        <div class="row"><div class="av bot">张</div><div class="bubble bot full">价上确实到边了，换个思路帮您省：<br>• 改现款省承兑贴现 ≈ ¥63/吨<br>• 自提省运费 ¥30/吨<br>相当于到 ¥3,712 的实在价，您看？</div></div>
+        <div class="row me"><div class="av user">张</div><div class="bubble me">那行 现款自提</div></div>
+        <div class="row"><div class="av bot">张</div><div class="bubble bot">👍 成交！这就给您锁价下单</div></div>
+      </div>
+    </div>
+
+    <!-- 5. 改量 跌穿MOQ -->
+    <div class="phone">
+      <div class="nav"><span class="ic">‹</span><div class="title">沙钢贸易·小钢助手<small>微信客服</small></div><span class="ic">⋯</span></div>
+      <div class="scene-label">⑤ 报价后改量（跌穿 MOQ 给选项）</div>
+      <div class="chat">
+        <div class="row me"><div class="av user">张</div><div class="bubble me">改成20吨吧</div></div>
+        <div class="row"><div class="av bot">钢</div>
+          <div class="card">
+            <div class="ch">⚠️ 低于螺纹起订量(30t)</div>
+            <div class="cb">
+              <div>您调整到 20 吨，低于过磅起订量，请选择：</div>
+              <div class="btn-row">
+                <span class="mini-btn p">A 加到30t按吨 ¥3,820</span>
+              </div>
+              <div class="btn-row">
+                <span class="mini-btn">B 按20支不过磅 ¥920/支</span>
+              </div>
+              <div class="btn-row">
+                <span class="mini-btn">C 保持原50吨方案</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="row me"><div class="av user">张</div><div class="bubble me">A</div></div>
+        <div class="row"><div class="av bot">钢</div><div class="bubble bot">好的，已更新为 30 吨 ¥3,820/吨，生成新版报价（原版本已保留）</div></div>
+      </div>
+    </div>
+
+    <!-- 6. 替代料 -->
+    <div class="phone">
+      <div class="nav"><span class="ic">‹</span><div class="title">沙钢贸易·小钢助手<small>微信客服</small></div><span class="ic">⋯</span></div>
+      <div class="scene-label">⑥ 替代料推荐（明示+客户确认）</div>
+      <div class="chat">
+        <div class="row me"><div class="av user">张</div><div class="bubble me">沙钢HRB400 Φ25 50吨</div></div>
+        <div class="row"><div class="av bot">钢</div>
+          <div class="card">
+            <div class="ch">🔄 沙钢暂缺，为您匹配替代</div>
+            <div class="cb">
+              <div class="kv"><span class="k">A 永钢同档(推荐)</span><span class="v price">¥3,795</span></div>
+              <div style="font-size:11.5px;color:#888;">永钢与沙钢均国标HRB400，可互换，省¥25/吨</div>
+              <div class="hr"></div>
+              <div class="kv"><span class="k">B 长锈轻锈</span><span class="v price">¥3,720</span></div>
+              <div style="font-size:11.5px;color:#888;">不影响结构，外观有锈，适合隐蔽工程</div>
+              <div class="note">⚠️ 替代料已明示，下单合同将单独标注，请确认是否接受</div>
+            </div>
+          </div>
+        </div>
+        <div class="row me"><div class="av user">张</div><div class="bubble me">确认A 永钢</div></div>
+      </div>
+    </div>
+
+    <!-- 7. 留货+支付 -->
+    <div class="phone">
+      <div class="nav"><span class="ic">‹</span><div class="title">沙钢贸易·小钢助手<small>微信客服</small></div><span class="ic">⋯</span></div>
+      <div class="scene-label">⑦ 留货下单（定金 + 微信支付）</div>
+      <div class="chat">
+        <div class="row me"><div class="av user">张</div><div class="bubble me">这个先留50吨</div></div>
+        <div class="row"><div class="av bot">钢</div>
+          <div class="card">
+            <div class="ch">📌 留货方案</div>
+            <div class="cb">
+              <div class="kv"><span class="k">品规</span><span class="v">螺纹Φ25沙钢50t</span></div>
+              <div class="kv"><span class="k">金额</span><span class="v">¥191,000</span></div>
+              <div class="kv"><span class="k">留货期</span><span class="v">3天(至6-2 17:00)</span></div>
+              <div class="kv"><span class="k">定金(10%)</span><span class="v price">¥19,100</span></div>
+              <div class="kv"><span class="k">批次</span><span class="v">FIFO 锁定#B2403</span></div>
+              <div class="note">您当前留货 2/3 单 · 库存已锁定</div>
+            </div>
+          </div>
+        </div>
+        <div class="row"><div class="av bot">钢</div>
+          <div class="card">
+            <div class="ch" style="background:#07c160;color:#fff;">微信支付 · 留货定金</div>
+            <div class="cb" style="text-align:center;">
+              <div style="font-size:24px;font-weight:700;color:#07c160;margin:6px 0;">¥19,100.00</div>
+              <div style="background:#07c160;color:#fff;border-radius:8px;padding:10px;font-size:14px;">立即支付定金</div>
+              <small style="display:block;margin-top:8px;color:#aaa;">支付后留货生效 · 24h 内有效</small>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 8. 语音 -->
+    <div class="phone">
+      <div class="nav"><span class="ic">‹</span><div class="title">沙钢贸易·小钢助手<small>微信客服</small></div><span class="ic">⋯</span></div>
+      <div class="scene-label">⑧ 语音询价（科大讯飞 ASR）</div>
+      <div class="chat">
+        <div class="row me"><div class="av user">张</div><div class="voice">◀)) 6″</div></div>
+        <div class="row"><div class="av bot">钢</div>
+          <div class="card">
+            <div class="ch">🎙️ 语音已识别 <span class="tag t-auto">置信度 88%</span></div>
+            <div class="cb">
+              <div style="color:#666;">我听到的是：</div>
+              <div style="background:#f6f8fa;border-radius:6px;padding:8px;margin:6px 0;font-weight:500;">螺纹 HRB400 Φ25 50吨 送武汉</div>
+              <div>对吗？</div>
+              <div class="btn-row"><span class="mini-btn p">对，继续</span><span class="mini-btn">我纠正</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="row me"><div class="av user">张</div><div class="bubble me">对</div></div>
+        <div class="row"><div class="av bot">钢</div><div class="bubble bot">好的，正在为您报价…</div></div>
+      </div>
+    </div>
+
+    <!-- 8b. 语音说多个规格 -->
+    <div class="phone">
+      <div class="nav"><span class="ic">‹</span><div class="title">沙钢贸易·小钢助手<small>微信客服</small></div><span class="ic">⋯</span></div>
+      <div class="scene-label">⑧b 一条语音说多个规格（v25）</div>
+      <div class="chat">
+        <div class="row me"><div class="av user">张</div><div class="voice">◀)) 11″</div></div>
+        <div class="row"><div class="av bot">钢</div>
+          <div class="card">
+            <div class="ch">🎙️ 语音识别 · 3个规格 <span class="tag t-auto">置信度86%</span></div>
+            <div class="cb">
+              <div style="color:#666;font-size:11.5px;">转写："螺纹25来50吨，中板12个100吨，再来点H型钢200的20吨，都送武汉"</div>
+              <div class="hr"></div>
+              <div class="kv"><span class="k">①螺纹HRB400 Φ25</span><span class="v">50吨 <span class="tag t-ok">✅</span></span></div>
+              <div class="kv"><span class="k">②中厚板Q235B 12mm</span><span class="v">100吨 <span class="tag t-ok">✅</span></span></div>
+              <div class="kv"><span class="k">③H型钢 HW200(?)</span><span class="v">20吨 <span class="tag t-miss">⚠️待确认</span></span></div>
+              <div class="hr"></div>
+              <div class="kv"><span class="k">共享·目的地</span><span class="v">武汉 <span class="tag t-said">✏️</span></span></div>
+              <div class="note">"中板12个"已识别为 12mm 厚度（非数量）；③规格请确认</div>
+              <div class="btn-row"><span class="mini-btn p">确认</span><span class="mini-btn">③是HW200×200</span><span class="mini-btn">删除③</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="row me"><div class="av user">张</div><div class="bubble me">③是HW200×200 确认</div></div>
+        <div class="row"><div class="av bot">钢</div><div class="bubble bot full">好的，3个规格逐个查库存中…①②有货，③需宝钢替代</div></div>
+      </div>
+    </div>
+
+    <!-- 9. 转人工 + 自动跟进 -->
+    <div class="phone">
+      <div class="nav"><span class="ic">‹</span><div class="title">沙钢贸易·小钢助手<small>微信客服</small></div><span class="ic">⋯</span></div>
+      <div class="scene-label">⑨ 转人工 & 自动跟进</div>
+      <div class="chat">
+        <div class="time">无库存/未定价/品类规格全空 → 转人工</div>
+        <div class="row me"><div class="av user">张</div><div class="bubble me">要点货 急用</div></div>
+        <div class="row"><div class="av bot">钢</div><div class="bubble bot full">您要询哪种钢材？比如螺纹/板材/管材，或发个图也行～</div></div>
+        <div class="row me"><div class="av user">张</div><div class="bubble me">就是要钢材</div></div>
+        <div class="row"><div class="av bot">钢</div><div class="bubble bot full">这边让销售小张电话联系您（还是上次为您服务的小张），5 分钟内～</div></div>
+        <div class="time">3天后 · 自动跟进（按采购周期）</div>
+        <div class="row"><div class="av bot">张</div><div class="bubble bot full">张总，月初了～看您往常这时候补货，这月螺纹行情稳，要不要先报个价？</div></div>
+      </div>
+    </div>
+
+  </div>
+</body>
+</html>

@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>客户端 · 微信小程序</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#e9edf2;color:#1a1a2e;padding:30px 20px 60px;}
+  .back{color:#2e7cf6;text-decoration:none;font-size:13px;}
+  .page-title{max-width:1200px;margin:8px auto;font-size:22px;color:#0f3057;font-weight:700;}
+  .page-sub{max-width:1200px;margin:0 auto 24px;font-size:13px;color:#6b7280;}
+  .stage{display:flex;flex-wrap:wrap;gap:24px;max-width:1280px;margin:0 auto;justify-content:center;}
+  .phone{width:340px;background:#f5f6f8;border-radius:26px;overflow:hidden;box-shadow:0 10px 30px rgba(15,48,87,.18);border:8px solid #1a1a2e;display:flex;flex-direction:column;}
+  .mp-nav{background:#fff;padding:12px 14px;display:flex;align-items:center;justify-content:center;position:relative;font-size:15px;font-weight:600;border-bottom:1px solid #f0f0f0;}
+  .mp-nav .caps{position:absolute;right:12px;top:11px;font-size:13px;color:#888;}
+  .mp-nav .home{position:absolute;right:46px;top:9px;}
+  .scene-label{background:#2e7cf6;color:#fff;font-size:12px;padding:6px 12px;text-align:center;}
+  .body{flex:1;overflow:auto;padding:12px;min-height:460px;}
+  .card{background:#fff;border-radius:12px;padding:14px;margin-bottom:12px;box-shadow:0 1px 6px rgba(0,0,0,.04);}
+  .card h4{font-size:14px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;}
+  .kv{display:flex;justify-content:space-between;padding:4px 0;font-size:13px;}
+  .kv .k{color:#888;}
+  .price{color:#e54848;font-weight:700;}
+  .seg{display:flex;gap:6px;margin:6px 0;}
+  .seg .opt{flex:1;text-align:center;font-size:12px;padding:7px 0;border-radius:8px;border:1px solid #e0e4ea;color:#555;background:#fff;}
+  .seg .opt.on{background:#2e7cf6;color:#fff;border-color:#2e7cf6;}
+  .seg-label{font-size:11.5px;color:#999;margin-top:8px;}
+  .line{border:1px solid #eef1f6;border-radius:10px;padding:10px;margin-bottom:8px;}
+  .line .lt{font-size:13px;font-weight:500;display:flex;justify-content:space-between;}
+  .line .lb{font-size:12px;color:#888;margin-top:4px;display:flex;justify-content:space-between;align-items:center;}
+  .stepper{display:flex;align-items:center;gap:8px;}
+  .stepper span{width:22px;height:22px;border:1px solid #d0d4da;border-radius:5px;text-align:center;line-height:20px;font-size:13px;color:#555;}
+  .stepper b{font-size:13px;}
+  .total-bar{background:#fff;padding:12px 14px;border-top:1px solid #f0f0f0;}
+  .total-bar .tt{display:flex;justify-content:space-between;font-size:13px;margin-bottom:8px;}
+  .btns{display:flex;gap:8px;}
+  .btns button{flex:1;border:none;border-radius:10px;padding:11px 0;font-size:13.5px;font-weight:600;}
+  .b1{background:#f0f4ff;color:#2e7cf6;}
+  .b2{background:#fff4e5;color:#f59e0b;}
+  .b3{background:#07c160;color:#fff;}
+  .tabbar{display:flex;background:#fff;border-top:1px solid #f0f0f0;}
+  .tabbar .tb{flex:1;text-align:center;padding:7px 0;font-size:10.5px;color:#999;}
+  .tabbar .tb.on{color:#2e7cf6;}
+  .tabbar .tb .i{font-size:18px;display:block;}
+  .badge{background:#e54848;color:#fff;font-size:10px;border-radius:8px;padding:0 5px;}
+  .todo{display:flex;gap:10px;align-items:center;padding:12px;background:#fff;border-radius:12px;margin-bottom:10px;box-shadow:0 1px 6px rgba(0,0,0,.04);}
+  .todo .ti{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px;}
+  .todo .tx{flex:1;}
+  .todo .tx .t1{font-size:13.5px;font-weight:500;}
+  .todo .tx .t2{font-size:11.5px;color:#999;margin-top:2px;}
+  .tag{font-size:10.5px;padding:1px 7px;border-radius:8px;}
+  .t-warn{background:#fff4e5;color:#f59e0b;}
+  .t-ok{background:#e7f7ec;color:#07a850;}
+  .timeline{padding-left:6px;}
+  .tl{display:flex;gap:10px;margin-bottom:14px;position:relative;}
+  .tl .dot{width:14px;height:14px;border-radius:50%;flex-shrink:0;margin-top:2px;}
+  .tl.done .dot{background:#07c160;}
+  .tl.cur .dot{background:#f59e0b;}
+  .tl.wait .dot{background:#d0d4da;}
+  .tl .c .t1{font-size:13px;font-weight:500;}
+  .tl .c .t2{font-size:11.5px;color:#999;}
+  .countdown{background:linear-gradient(135deg,#ff9a3c,#ff6b6b);color:#fff;border-radius:12px;padding:14px;text-align:center;margin-bottom:12px;}
+  .countdown .big{font-size:26px;font-weight:700;letter-spacing:2px;}
+</style>
+</head>
+<body>
+  <a class="back" href="index.html">← 返回原型导航</a>
+  <div class="page-title">客户端 · 微信小程序（页面式重交互）</div>
+  <div class="page-sub">平台统一小程序 + 企业隔离。客户进入后绑定所属钢贸企业。核心：报价逐行编辑（开票/结算/交付实时重算）、留货支付、订单磅单材质书。</div>
+
+  <div class="stage">
+
+    <!-- 首页 -->
+    <div class="phone">
+      <div class="mp-nav"><span class="home">⊙</span>钢贸助手<span class="caps">●●●</span></div>
+      <div class="scene-label">首页 · 待办聚合</div>
+      <div class="body">
+        <div class="card" style="background:linear-gradient(135deg,#0f3057,#2e7cf6);color:#fff;">
+          <div style="font-size:13px;opacity:.85;">武汉建工 · 张总</div>
+          <div style="font-size:12px;opacity:.7;margin-top:2px;">绑定企业：沙钢贸易（华中）· 量型客户</div>
+        </div>
+        <div class="todo"><div class="ti" style="background:#eef0ff;">💰</div><div class="tx"><div class="t1">报价 Q-001 待确认</div><div class="t2">螺纹Φ25 50t · ¥209,615 · 剩 36h</div></div><span class="tag t-warn">待处理</span></div>
+        <div class="todo"><div class="ti" style="background:#fff4e5;">📌</div><div class="tx"><div class="t1">留货 RES-001 即将到期</div><div class="t2">螺纹Φ25 50t · 剩 5h45m</div></div><span class="tag t-warn">5h</span></div>
+        <div class="todo"><div class="ti" style="background:#e7f7ec;">🚚</div><div class="tx"><div class="t1">订单 SO-0512 已发车</div><div class="t2">预计明早9点到江夏仓</div></div><span class="tag t-ok">在途</span></div>
+        <div class="todo"><div class="ti" style="background:#f0f4ff;">📄</div><div class="tx"><div class="t1">5月结算单待确认</div><div class="t2">应付 ¥1,234,567</div></div><span class="tag t-warn">待确认</span></div>
+      </div>
+      <div class="tabbar">
+        <div class="tb on"><span class="i">🏠</span>首页</div>
+        <div class="tb"><span class="i">📝</span>询价</div>
+        <div class="tb"><span class="i">📋</span>报价</div>
+        <div class="tb"><span class="i">📦</span>订单</div>
+        <div class="tb"><span class="i">👤</span>我的</div>
+      </div>
+    </div>
+
+    <!-- 报价详情编辑 -->
+    <div class="phone">
+      <div class="mp-nav"><span class="home">⊙</span>报价详情 Q-001<span class="caps">●●●</span></div>
+      <div class="scene-label">报价详情 · 逐行编辑 + 实时重算</div>
+      <div class="body">
+        <div class="card">
+          <h4>全局选项 <span style="font-size:11px;color:#999;font-weight:400;">改任意项即时重算</span></h4>
+          <div class="seg-label">开票方式</div>
+          <div class="seg"><div class="opt on">一票制</div><div class="opt">两票制</div></div>
+          <div class="seg-label">结算方式</div>
+          <div class="seg"><div class="opt on">现金</div><div class="opt">银行承兑</div><div class="opt">账期</div></div>
+          <div class="seg-label">交付方式</div>
+          <div class="seg"><div class="opt">自提</div><div class="opt on">送货上门</div><div class="opt">代送</div></div>
+        </div>
+        <div class="line">
+          <div class="lt"><span>螺纹 HRB400 Φ25 沙钢</span><span class="price">¥3,820</span></div>
+          <div class="lb"><span>过磅 · 12米</span><div class="stepper"><span>−</span><b>50</b><span>+</span> 吨</div></div>
+        </div>
+        <div class="line">
+          <div class="lt"><span>中板 Q235B 12mm</span><span class="price">¥4,050</span></div>
+          <div class="lb"><span>过磅</span><div class="stepper"><span>−</span><b>100</b><span>+</span> 吨</div></div>
+        </div>
+        <div class="line">
+          <div class="lt"><span>H型钢 HW200 宝钢<span class="tag t-warn">替代</span></span><span class="price">¥4,200</span></div>
+          <div class="lb"><span>抄牌 · 标称50.2t</span><div class="stepper"><span>−</span><b>20</b><span>+</span> 件</div></div>
+        </div>
+      </div>
+      <div class="total-bar">
+        <div class="tt"><span>含税合计</span><span class="price" style="font-size:16px;">¥958,000</span></div>
+        <div class="btns"><button class="b1">下载PDF</button><button class="b2">议价</button><button class="b3">确认下单</button></div>
+      </div>
+    </div>
+
+    <!-- 留货页 -->
+    <div class="phone">
+      <div class="mp-nav"><span class="home">⊙</span>留货 RES-001<span class="caps">●●●</span></div>
+      <div class="scene-label">留货 · 定金支付 + 倒计时</div>
+      <div class="body">
+        <div class="countdown"><div style="font-size:12px;opacity:.9;">留货剩余时间</div><div class="big">05 : 45 : 12</div><div style="font-size:11px;opacity:.85;margin-top:4px;">至 6-2 17:00 · 过期扣50%违约金</div></div>
+        <div class="card">
+          <h4>留货明细</h4>
+          <div class="kv"><span class="k">品规</span><span>螺纹Φ25 沙钢</span></div>
+          <div class="kv"><span class="k">数量</span><span>50 吨（过磅）</span></div>
+          <div class="kv"><span class="k">锁定批次</span><span>#B2403（FIFO）</span></div>
+          <div class="kv"><span class="k">炉号</span><span>24A0512</span></div>
+          <div class="kv"><span class="k">金额</span><span class="price">¥191,000</span></div>
+          <div class="kv"><span class="k">已付定金</span><span class="t-ok tag">¥19,100 ✓</span></div>
+          <div class="kv"><span class="k">待付余款</span><span class="price">¥171,900</span></div>
+        </div>
+        <div class="card" style="background:#f6f8fa;text-align:center;font-size:12px;color:#888;">转单付清余款即安排发车 · 也可申请延期(销售审批)</div>
+      </div>
+      <div class="total-bar">
+        <div class="btns"><button class="b1">申请延期</button><button class="b3">付余款转单</button></div>
+      </div>
+    </div>
+
+    <!-- 订单详情 -->
+    <div class="phone">
+      <div class="mp-nav"><span class="home">⊙</span>订单 SO-0512<span class="caps">●●●</span></div>
+      <div class="scene-label">订单 · 进度链 + 磅单 + 材质书</div>
+      <div class="body">
+        <div class="card">
+          <h4>订单进度</h4>
+          <div class="timeline">
+            <div class="tl done"><div class="dot"></div><div class="c"><div class="t1">已下单</div><div class="t2">5-28 10:30</div></div></div>
+            <div class="tl done"><div class="dot"></div><div class="c"><div class="t1">已配货（批次#B2403）</div><div class="t2">5-28 14:00</div></div></div>
+            <div class="tl done"><div class="dot"></div><div class="c"><div class="t1">已过磅 49.86t</div><div class="t2">5-29 08:15 · 磅单为准</div></div></div>
+            <div class="tl cur"><div class="dot"></div><div class="c"><div class="t1">在途 🚚 鄂A·12345</div><div class="t2">预计明早9点到江夏仓</div></div></div>
+            <div class="tl wait"><div class="dot"></div><div class="c"><div class="t1">待签收</div><div class="t2">—</div></div></div>
+          </div>
+        </div>
+        <div class="card">
+          <h4>随货单据</h4>
+          <div class="kv"><span class="k">📄 磅单（49.86t）</span><span style="color:#2e7cf6;">查看</span></div>
+          <div class="kv"><span class="k">📄 材质书（炉号24A0512）</span><span style="color:#2e7cf6;">查看</span></div>
+          <div style="font-size:11.5px;color:#888;margin-top:6px;">化学成分：C 0.23 / P 0.028 / S 0.022 / Ceq 0.48 ✓</div>
+        </div>
+      </div>
+      <div class="tabbar">
+        <div class="tb"><span class="i">🏠</span>首页</div>
+        <div class="tb"><span class="i">📝</span>询价</div>
+        <div class="tb"><span class="i">📋</span>报价</div>
+        <div class="tb on"><span class="i">📦</span>订单</div>
+        <div class="tb"><span class="i">👤</span>我的</div>
+      </div>
+    </div>
+
+  </div>
+</body>
+</html>
