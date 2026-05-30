@@ -2511,5 +2511,149 @@ surplus_length_config:            # 企业按品类默认 + 销售单据级可�
 | `order_surplus_override` | 余尺销售单据级覆盖记录（v22） |
 | `customer_quality_preference` | 客户成分/标准/负差偏好（学习） |
 
+### 5.33+ 销售粘性分配（v23 扩展 Lead Routing）
+
+```python
+def route_with_stickiness(req):
+    # 1. 绑定销售（v10）
+    if bound := customer.bound_salesperson_id:
+        if is_available(bound): return assign(bound, "bound")
+    # 2. 粘性：进行中/近期服务（v23）
+    if config.stickiness_enabled:
+        sticky = find_sticky_sales(customer, window=config.stickiness_days)
+        # sticky = 有未关闭询价/报价/议价/留货 OR 窗口内服务过
+        if sticky and is_available(sticky):
+            return assign(sticky, "stickiness")
+    # 3. 池抽签（v10）
+    return pool_weighted_pick(req)
+```
+
+- 粘性窗口默认 30 天，企业可配；是否启用粘性可配
+- 新表 `customer_sales_stickiness`（客户↔销售↔最近服务时间↔进行中标记）
+
+### 5.36+ 替代料三类（v23 扩展 Substitute KB）
+
+| 类型 | 关系 | 风险/caveat |
+|---|---|---|
+| 壁厚替代 | 矩管/管材壁厚减薄（2.75→2.5） | **强 caveat**：承重下降；工程类禁用；客户确认 |
+| 单重替代 | 理计同规格不同实际单重（10kg→9kg 角钢） | **强 caveat**：理计吨同但实物少；明示 |
+| 产地替代 | 马钢→宝钢（= 同档异厂） | 标产地 + 标准兼容（5.70） |
+
+- 壁厚/单重替代 recommendation_strength = discouraged/weak，默认走销售确认
+- 与用途场景（v11）：工程类用途禁壁厚/单重替代
+- 成分/标准兼容（5.70）硬约束仍适用
+
+### 5.71 Promotion Engine（促销优惠引擎 - v23）
+
+**5.71.1 与议价让步的区别**
+
+| | 促销（5.71） | 议价让步（v7） |
+|---|---|---|
+| 性质 | 系统主动明牌 | 博弈中被动让 |
+| 时机 | 报价时自动应用 | 客户砍价后 |
+| 透明 | 客户可见规则 | 内部预算不可见 |
+
+**5.71.2 优惠类型**
+
+```yaml
+promotion_rules:        # 企业可配，按品类
+  order_volume_discount:        # 整单量优惠
+    - { min_ton: 100, discount: 20, unit: 元/吨 }
+    - { min_ton: 300, discount: 35 }
+  spec_volume_discount:         # 单规格量优惠
+    螺纹钢Φ25: [{ min_ton: 50, discount: 15 }]
+  aging_discount:               # 库龄优惠（呆滞促销）
+    - { min_age_days: 90, discount: 50, unit: 元/吨 }
+    - { min_age_days: 180, discount: 100 }
+  form: unit_price_cut | order_total_cut   # 单价降 or 整单减
+```
+
+**5.71.3 应用流程**
+
+```
+报价生成 → Promotion Engine 检查可用优惠 →
+  整单量达标 → 应用整单优惠
+  单规格量达标 → 应用规格优惠
+  命中库龄批次（5.73）→ 应用库龄优惠
+→ 叠加规则（可配是否可叠加）→ 全成本红线校验（v16）→ 报价展示优惠
+```
+
+- 与库龄优惠 → Batch Inventory（5.73）联动
+- 促销后仍须过全成本红线
+- 促销 + 议价叠加规则企业可配
+
+**5.71.4 新增存储**：`promotion_rule_config` / `promotion_applied_log`
+
+### 5.72 Voice Input / ASR（语音输入 - v23）
+
+```
+语音消息 → Channel Adapter(msg_type=voice) → 拉语音文件 →
+ASR 转写（通义听悟 / Qwen-Audio）→ 文字 →
+Steel KB 实体校正（5.36）→ 低置信回显确认 → 正常意图流程
+```
+
+- 钢铁黑话/方言：转写后经 KB 校正（"螺四"等）
+- 低置信度 → "我听到的是：螺纹 HRB400 Φ25 50吨送武汉，对吗？"
+- 语音计入 ASR 配额（v15 计费）
+- 新表 `voice_transcription_log`
+
+### 5.73 Batch Inventory（批次库存 - v23）
+
+**5.73.1 批次模型**
+
+```yaml
+InventoryBatch:
+  batch_no, sku, warehouse
+  furnace_no（炉号）, production_date, age_days（库龄）
+  actual_unit_weight（实际单重）, quality_grade
+  qty_total, qty_available, qty_reserved, qty_sold
+```
+
+- 库存 = Σ 批次；v47 的 available/reserved/sold 细化到批次
+- 留货/下单匹配批次（FIFO 默认 / 销售指定）
+
+**5.73.2 批次联动**
+
+| 联动 | 说明 |
+|---|---|
+| 库龄优惠（5.71） | 按批次 age_days 促销 |
+| 材质书（5.60） | 按 furnace_no 出证 |
+| 负差/单重（5.70） | 按批次 actual_unit_weight |
+| 留货（5.46） | reserved 锁定到具体批次 |
+
+**5.73.3 新增存储**：`inventory_batch` / `batch_allocation_log`
+
+### 5.74 Auto Follow-up Engine（自动跟进 - v23）
+
+**5.74.1 触发规则**
+
+```yaml
+follow_up_triggers:
+  inquiry_no_quote:    { delay: 30min, to: sales }
+  quote_no_deal:       { schedule: 按客户画像节奏 }   # 求利/求量不同
+  periodic_repurchase: { by: 历史购买周期 }           # 客户每月初采购→提前提醒
+  credit_due:          { before_days: 3 }
+  reservation_expiry:  { v13 已有 }
+  price_change:        { 订阅通知 v18 }
+```
+
+**5.74.2 频率控制（防骚扰）**
+
+- 单客户每周跟进上限（可配）
+- 与软干预（v6）协同：ghost 客户不过度跟进
+- 静默时段（夜间不发）
+
+**5.74.3 渠道**
+
+- 微信客服 48h 窗口内直接发
+- 超窗口 → 小程序订阅消息（v18）/ 引导客户重新发起
+
+**5.74.4 个性化 + 学习**
+
+- 模板 + 销售个人风格（v14）
+- 跟进效果（是否回复/成交）回流自我学习（v12）
+
+**5.74.5 新增存储**：`follow_up_rule_config` / `follow_up_log` / `follow_up_effect`
+
 ---
 
