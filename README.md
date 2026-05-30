@@ -126,6 +126,8 @@
 | [`docs/TRACEABILITY.md`](./docs/TRACEABILITY.md) | **需求溯源矩阵**：84 项需求逐条对照设计，证明无遗漏 |
 | [`docs/ACCEPTANCE.md`](./docs/ACCEPTANCE.md) | **验收标准与验收用例**：量化 KPI + 20 个端到端 UAT 场景 + 防错红线 |
 | [`docs/ROADMAP.md`](./docs/ROADMAP.md) | **实施路线图**：59 里程碑按依赖重排为 7 个 Phase（地基→MVP→报价→交易→运营智能→多模态→小程序）+ 关键路径 + 并行机会 + 外部前置 + 风险 |
+| [`docs/DEV-GUIDE.md`](./docs/DEV-GUIDE.md) | **AI 开发指南**：Cursor 系统提示词 + 分阶段开发提示词 + 防走样四大铁律 + 模块/防走样/验收/防漏功能 四类 Checklist |
+| [`.cursor/rules/`](./.cursor/rules/) | **Cursor 全局规则**（已生成）：`00-global.mdc` 项目上下文 + `01-ironrules.mdc` 四大铁律，开发时自动生效 |
 
 ## 一句话方案
 

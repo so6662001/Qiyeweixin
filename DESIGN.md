@@ -56,6 +56,8 @@
 > - [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md) — **验收标准与验收用例**（量化 KPI + 20 个端到端 UAT 场景 + 防错红线）
 > - [`prototypes/index.html`](prototypes/index.html) — **高保真 UI 原型**（浏览器打开；客户对话/小程序/销售工作台/管理后台）
 > - [`docs/ROADMAP.md`](docs/ROADMAP.md) — **实施路线图**（59 里程碑按依赖重排为 7 个 Phase + 关键路径 + 并行机会 + 风险 + 外部前置）
+> - [`docs/DEV-GUIDE.md`](docs/DEV-GUIDE.md) — **AI 开发指南**（Cursor 系统提示词 + 分阶段提示词 + 防走样四大铁律 + 三类 Checklist）
+> - [`.cursor/rules/`](.cursor/rules/) — **Cursor 全局规则**（00-global 项目上下文 + 01-ironrules 四大铁律，开发时始终生效）
 
 ## 0. 需求方已确认的关键约束
 
