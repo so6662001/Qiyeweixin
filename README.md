@@ -125,6 +125,7 @@
 | [`docs/appendix.md`](./docs/appendix.md) | 第 14 章 议价场景样例附录 |
 | [`docs/TRACEABILITY.md`](./docs/TRACEABILITY.md) | **需求溯源矩阵**：84 项需求逐条对照设计，证明无遗漏 |
 | [`docs/ACCEPTANCE.md`](./docs/ACCEPTANCE.md) | **验收标准与验收用例**：量化 KPI + 20 个端到端 UAT 场景 + 防错红线 |
+| [`docs/ROADMAP.md`](./docs/ROADMAP.md) | **实施路线图**：59 里程碑按依赖重排为 7 个 Phase（地基→MVP→报价→交易→运营智能→多模态→小程序）+ 关键路径 + 并行机会 + 外部前置 + 风险 |
 
 ## 一句话方案
 
@@ -185,4 +186,16 @@
 - M54 钢铁领域深度知识（化学成分/钢厂标准/捆件重/余尺负差 + 替代料兼容判断）
 - M55~M59 七个业务深化（销售粘性+替代料三类 / 促销优惠+多规格库存反馈 / 语音输入 / 批次库存 / 自动跟进）
 
-详见 [`docs/operations.md`](./docs/operations.md)。
+实施排期（按依赖分 7 个 Phase，不估日历时间）详见 [`docs/ROADMAP.md`](./docs/ROADMAP.md)：
+
+```
+Phase 0 地基（通信/绑定/会话/配置中心）
+   → Phase 1 MVP（八项只读查询 + 询价转销售）← 最快产生价值
+   → Phase 2 报价核心（KB/计量/库存/构成/策略/投递/防幻觉）
+   → Phase 3 交易闭环（议价/改量/留货+批次/替代料/促销/自建能力）
+   → Phase 4 运营智能（路由评分粘性/自动跟进/自我学习/防幻觉）
+   ∥ Phase 5 多模态（图片/Excel/PDF/语音/多规格，可并行）
+   ∥ Phase 6 小程序 + SaaS 计费（后端稳定后并行）
+```
+
+详见 [`docs/operations.md`](./docs/operations.md) 与 [`docs/ROADMAP.md`](./docs/ROADMAP.md)。
