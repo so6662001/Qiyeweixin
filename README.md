@@ -12,6 +12,7 @@
 |---|---|
 | [`prototypes/customer-chat.html`](./prototypes/customer-chat.html) | 客户端微信对话全流程（询价解析/报价投递/多规格库存/议价/改量/替代料/留货支付/语音/转人工/自动跟进 9 场景） |
 | [`prototypes/miniprogram.html`](./prototypes/miniprogram.html) | 客户端小程序（首页待办/报价逐行编辑实时重算/留货支付/订单磅单材质书） |
+| [`prototypes/miniprogram-extra.html`](./prototypes/miniprogram-extra.html) | 小程序补充页（询价发起多入口+多行 SKU/对账单确认/付款凭证上传 OCR） |
 | [`prototypes/sales-workbench.html`](./prototypes/sales-workbench.html) | 销售端企业微信工作台（询价工单+客户画像+系统建议/议价方案/团队 Leaderboard/留货到期提醒） |
 | [`prototypes/admin-console.html`](./prototypes/admin-console.html) | 管理后台配置中心（计量方式品类矩阵/负差拆捆余尺/毛利底线/需求验收看板） |
 
