@@ -2293,5 +2293,97 @@ H5（5.67）= 小程序不可用/审核期备选
 
 形态（平台统一 vs 白标）/ 支付资质 / 开放平台账号 / 销售端 / 上线时机 / 白标增值。
 
+### 5.69 Sales Measurement Method Engine（销售计量方式引擎 - v19 核心）
+
+**5.69.1 计量方式数据模型**
+
+```yaml
+SalesMeasurementMethod:
+  method: 过磅 | 点支 | 理计 | 平方 | 按米 | 抄牌
+  price_unit: 元/吨 | 元/支 | 元/根 | 元/㎡ | 元/米
+  quantity_unit: 吨 | 支 | 根 | ㎡ | 米 | 件 | 捆
+  weight_basis: actual | theoretical | nameplate | none
+  show_ton_equivalent: true | false   # 是否展示折合吨
+```
+
+**5.69.2 企业配置矩阵**
+
+```yaml
+tenant_category_measurement:
+  <tenant_id>:
+    <category>:
+      allowed: [过磅, 抄牌, ...]
+      default: 过磅
+      forbidden: [点支, ...]
+```
+
+- 存 Configuration Center（5.53），类型 = policy_rule
+- 业务部维护；不在 allowed 内的方式 → 系统禁用并提示
+
+**5.69.3 计量 → 价格/数量计算**
+
+```python
+def calc_amount(method, qty, unit_price, item):
+    if method == "过磅":
+        # 下单预估吨位，磅单为准
+        return qty_ton_estimate * unit_price, "以实际过磅为准"
+    if method == "点支":
+        return qty_pieces * unit_price_per_piece, None
+    if method == "理计":
+        theo_weight = qty * lookup_theoretical_weight(item)
+        return theo_weight * unit_price_per_ton, None
+    if method == "平方":
+        return qty_sqm * unit_price_per_sqm, None
+    if method == "按米":
+        return qty_meter * unit_price_per_meter, None
+    if method == "抄牌":
+        nameplate_weight = lookup_nameplate_weight(item, qty_pieces)
+        return nameplate_weight * unit_price_per_ton, None
+```
+
+**5.69.4 重量表（复用 + 扩展 Steel KB 5.36）**
+
+| 表 | 用途 |
+|---|---|
+| `theoretical_weight_table` | 理论单重（理计用，5.36 已有） |
+| `nameplate_weight_table` | 抄牌标称重量（抄牌用，v19 新增）|
+
+**5.69.5 过磅预估 vs 磅单结算**
+
+```
+下单（过磅方式）：按理论/历史估吨位 → 预估金额
+发货过磅 → 实际吨位（v3 装车重量 / 磅单）
+结算：以磅单为准
+磅差处理：企业可配（磅差范围、超差是否复磅、超差责任）
+```
+
+**5.69.6 与各模块联动**
+
+| 模块 | 联动 |
+|---|---|
+| Inquiry Parser（5.12） | 识别 qty 单位 + 按品类默认推断计量方式 |
+| Default Resolver（5.14） | 计量方式缺失 → 用企业品类默认 |
+| Price Composition（5.66） | 各构成项按计量单位计价 |
+| MOQ（5.18/v8） | MOQ 按计量方式（吨/支/㎡…） |
+| Inventory（5.47） | 库存计量与销售计量换算 |
+| Reservation（5.46） | 留货量按计量方式 |
+| Interactive Quote Editor（5.61） | 报价单价格单位 + 改量单位 |
+| 自我学习（5.40） | 学客户/品类常用计量方式（事实，可学）|
+
+**5.69.7 校验规则**
+
+- 客户/销售选的计量方式必须在企业该品类 allowed 内
+- 不允许的方式 → 提示"本企业 H型钢仅支持抄牌/过磅"
+- 计量方式与品类不匹配（如螺纹按平方）→ 拦截 + 反问
+
+**5.69.8 新增存储**
+
+| 表 | 用途 |
+|---|---|
+| `measurement_method_config` | 企业×品类×计量方式配置 |
+| `nameplate_weight_table` | 抄牌标称重量表 |
+| `weighbridge_diff_rule` | 磅差处理规则 |
+| `customer_measurement_preference` | 客户常用计量方式（学习） |
+
 ---
 
