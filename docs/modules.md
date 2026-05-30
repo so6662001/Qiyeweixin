@@ -2197,5 +2197,101 @@ def handle_customer_reply(msg):
 | `quote_interaction_event` | 客户交互事件（菜单点击/页面操作/文字指令） |
 | `h5_quote_session` | H5/小程序报价会话态 |
 
+### 5.68 Mini Program（微信小程序 - v18 核心）
+
+**5.68.1 形态：平台统一小程序 + 企业隔离**
+
+```
+一个平台小程序（SaaS）
+  ├ 客户进入 → 绑定所属钢贸企业（tenant_id）
+  ├ 数据按 tenant 隔离（复用 v14 多租户）
+  ├ 微信支付：平台商户号 + 分账 / 各企业子商户号
+  └ 大客户可升级白标小程序（增值）
+```
+
+**5.68.2 BFF（Backend for Frontend）**
+
+```
+小程序前端
+   ↓ HTTPS API
+BFF 层（小程序专用聚合接口）
+   ↓ 复用
+Bot 后端引擎（Pricing / Composition / 议价 / 留货 / 自建能力层 / 配置中心）
+```
+
+- BFF 做接口聚合 + 小程序态裁剪，不重复业务逻辑
+- 后端引擎与微信对话侧完全共享
+
+**5.68.3 身份打通**
+
+```python
+# 小程序登录 → 关联 Bot 客户身份
+def mp_login(code):
+    session = wx_code2session(code)      # openid + unionid
+    binding = find_by_unionid(session.unionid)
+    if not binding:
+        # 引导绑定（与微信客服 external_userid 关联）
+        return need_binding(session)
+    return inject_biz_identity(binding.biz_user_id)  # 复用 v5 绑定
+```
+
+- 平台小程序 + 微信客服挂同一微信开放平台账号 → unionid 唯一
+- external_userid ←→ unionid ←→ biz_user_id 三者打通
+
+**5.68.4 页面与后端映射**
+
+| 页面 | 复用后端 |
+|---|---|
+| 询价 | Inquiry Parser（5.12）+ 自建询价单（5.60） |
+| 报价详情 | Interactive Quote Editor（5.61）+ Price Composition（5.66） |
+| 议价 | 议价引擎（4.8 / 5.24） |
+| 留货 | Reservation（4.15 / 5.46）+ 微信支付 |
+| 订单/磅单/材质书 | ACL 调 ERP + 自建材质书（5.60） |
+| 对账/付款凭证 | 结算单 + 付款凭证（5.60）+ 微信支付 |
+
+**5.68.5 微信支付**
+
+| 场景 | 实现 |
+|---|---|
+| 留货定金 | wx.requestPayment → Deposit Manager（5.48）回调 |
+| 余款/付款 | 转单付清 / 对账后付款 |
+| 分账 | 平台商户号收 → 分账各企业；或各企业子商户号直收 |
+
+**5.68.6 订阅消息**
+
+| 模板 | 触发 |
+|---|---|
+| 报价更新 | 议价/改量后新报价 |
+| 留货到期 | T-24h/12h/1h（5.49） |
+| 订单状态 | shipment.*（Inbound Webhook 5.10） |
+| 对账单生成 | settlement.created |
+
+- 一次性订阅，客户每次授权
+- 与微信客服 48h 窗口互补（订阅消息可突破窗口）
+
+**5.68.7 降级与三层关系**
+
+```
+对话式（5.67 微信客服文字/菜单）= 主入口 + 兜底
+  ↑增强
+小程序（5.68）= 重交互核心
+  ↑降级
+H5（5.67）= 小程序不可用/审核期备选
+```
+
+**5.68.8 新增存储**
+
+| 表 | 用途 |
+|---|---|
+| `mp_user_binding` | 小程序 openid/unionid ←→ biz_user_id |
+| `mp_subscribe_authorization` | 订阅消息授权记录 |
+| `wx_payment_transaction` | 微信支付交易 |
+| `wx_payment_settlement` | 分账记录 |
+| `mp_tenant_binding` | 客户 ←→ 所属钢贸企业 tenant |
+
+**5.68.9 待决策（见 DESIGN.md 1.17.11）**
+
+形态（平台统一 vs 白标）/ 支付资质 / 开放平台账号 / 销售端 / 上线时机 / 白标增值。
+
 ---
 
