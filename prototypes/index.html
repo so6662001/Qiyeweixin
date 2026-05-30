@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>钢贸智能助手 · 高保真原型导航</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; background:#f0f2f5; color:#1a1a2e; }
+  .top { background:linear-gradient(135deg,#0f3057,#2e7cf6); color:#fff; padding:48px 24px 64px; }
+  .top h1 { font-size:28px; font-weight:700; }
+  .top p { margin-top:10px; opacity:.85; font-size:14px; max-width:760px; line-height:1.6; }
+  .badge { display:inline-block; background:rgba(255,255,255,.18); border:1px solid rgba(255,255,255,.3); padding:4px 12px; border-radius:20px; font-size:12px; margin-top:16px; }
+  .wrap { max-width:1100px; margin:-40px auto 60px; padding:0 24px; }
+  .group { margin-bottom:36px; }
+  .group h2 { font-size:16px; margin:0 0 14px; color:#0f3057; display:flex; align-items:center; gap:8px; }
+  .group h2 .dot { width:8px; height:8px; border-radius:50%; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:16px; }
+  .card { background:#fff; border-radius:14px; padding:20px; box-shadow:0 2px 12px rgba(15,48,87,.08); text-decoration:none; color:inherit; transition:.2s; border:1px solid #eef1f6; display:block; }
+  .card:hover { transform:translateY(-3px); box-shadow:0 8px 24px rgba(15,48,87,.15); }
+  .card .ico { font-size:26px; }
+  .card h3 { font-size:15px; margin:10px 0 6px; }
+  .card p { font-size:12.5px; color:#6b7280; line-height:1.5; }
+  .card .tags { margin-top:10px; display:flex; flex-wrap:wrap; gap:6px; }
+  .card .tags span { font-size:11px; background:#f0f4ff; color:#2e7cf6; padding:2px 8px; border-radius:10px; }
+  .legend { background:#fff; border-radius:14px; padding:18px 22px; font-size:13px; color:#555; line-height:1.8; border:1px solid #eef1f6; }
+  .legend b { color:#0f3057; }
+  footer { text-align:center; color:#9aa3b2; font-size:12px; padding:24px; }
+</style>
+</head>
+<body>
+  <div class="top">
+    <h1>钢贸智能助手 · 高保真 UI 原型</h1>
+    <p>面向钢铁贸易/生产加工的企业微信智能机器人。本原型用真实钢贸数据呈现各功能界面，覆盖客户端（微信对话 + 小程序）、销售端（企业微信工作台）、管理后台，确保设计落地不走样。</p>
+    <span class="badge">配套设计文档 DESIGN.md · 需求溯源 TRACEABILITY.md · 验收 ACCEPTANCE.md</span>
+  </div>
+  <div class="wrap">
+
+    <div class="group">
+      <h2><span class="dot" style="background:#07c160"></span>客户端 · 微信对话（外部客户 / 微信客服）</h2>
+      <div class="cards">
+        <a class="card" href="customer-chat.html">
+          <div class="ico">💬</div>
+          <h3>微信对话全流程</h3>
+          <p>询价解析→报价投递→议价→改量→替代料→留货→语音→转人工→自动跟进，9 大对话场景</p>
+          <div class="tags"><span>9要素解析</span><span>报价构成</span><span>议价</span><span>留货</span></div>
+        </a>
+      </div>
+    </div>
+
+    <div class="group">
+      <h2><span class="dot" style="background:#2e7cf6"></span>客户端 · 微信小程序（页面式重交互）</h2>
+      <div class="cards">
+        <a class="card" href="miniprogram.html">
+          <div class="ico">📱</div>
+          <h3>小程序界面</h3>
+          <p>首页待办聚合、报价详情逐行编辑（开票/结算/交付实时重算）、留货支付、订单磅单材质书</p>
+          <div class="tags"><span>逐行编辑</span><span>实时重算</span><span>微信支付</span></div>
+        </a>
+      </div>
+    </div>
+
+    <div class="group">
+      <h2><span class="dot" style="background:#7c3aed"></span>销售端 · 企业微信工作台</h2>
+      <div class="cards">
+        <a class="card" href="sales-workbench.html">
+          <div class="ico">🧑‍💼</div>
+          <h3>销售工作台</h3>
+          <p>询价工单（客户画像+系统建议方案+一键确认）、议价方案选择、团队 Leaderboard、留货到期提醒</p>
+          <div class="tags"><span>客户画像</span><span>系统建议</span><span>竞争评分</span></div>
+        </a>
+      </div>
+    </div>
+
+    <div class="group">
+      <h2><span class="dot" style="background:#f59e0b"></span>管理后台 · 配置中心</h2>
+      <div class="cards">
+        <a class="card" href="admin-console.html">
+          <div class="ico">⚙️</div>
+          <h3>企业配置后台</h3>
+          <p>计量方式品类矩阵、报价策略、定金规则、销售路由、促销优惠、自我学习参数、客户画像看板</p>
+          <div class="tags"><span>多租户</span><span>按品类配置</span><span>灰度发布</span></div>
+        </a>
+      </div>
+    </div>
+
+    <div class="legend">
+      <b>图例说明</b><br>
+      ✏️ 客户明确说的　🤖 系统默认推断　🧮 自动计算　✅ 客户已确认　❓ 待补充　⚠️ 风险提示<br>
+      原型为静态高保真示意，交互逻辑以 DESIGN.md 与 docs/ 为准；数据为钢贸示例数据。
+    </div>
+  </div>
+  <footer>钢贸智能助手 · 设计阶段高保真原型 · 仅供需求评审与防走样核对</footer>
+</body>
+</html>

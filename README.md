@@ -4,6 +4,19 @@
 
 当前阶段：**设计阶段**（尚未开发）。设计文档 v24。全部待确认问题已确认。
 
+## 高保真 UI 原型（防走样）
+
+用 HTML 做的高保真界面原型，**用浏览器直接打开 [`prototypes/index.html`](./prototypes/index.html)** 即可查看全部：
+
+| 原型 | 内容 |
+|---|---|
+| [`prototypes/customer-chat.html`](./prototypes/customer-chat.html) | 客户端微信对话全流程（询价解析/报价投递/多规格库存/议价/改量/替代料/留货支付/语音/转人工/自动跟进 9 场景） |
+| [`prototypes/miniprogram.html`](./prototypes/miniprogram.html) | 客户端小程序（首页待办/报价逐行编辑实时重算/留货支付/订单磅单材质书） |
+| [`prototypes/sales-workbench.html`](./prototypes/sales-workbench.html) | 销售端企业微信工作台（询价工单+客户画像+系统建议/议价方案/团队 Leaderboard/留货到期提醒） |
+| [`prototypes/admin-console.html`](./prototypes/admin-console.html) | 管理后台配置中心（计量方式品类矩阵/负差拆捆余尺/毛利底线/需求验收看板） |
+
+> 原型用真实钢贸数据呈现关键功能，确保设计落地不走样。
+
 ## 如何评估设计是否符合要求
 
 - **怕漏需求**？看 [`docs/TRACEABILITY.md`](./docs/TRACEABILITY.md)：把你从第一句话到现在提的 **84 项需求**逐条列出，对照设计覆盖位置，证明无遗漏。
