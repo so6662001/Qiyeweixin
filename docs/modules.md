@@ -2393,5 +2393,102 @@ def calc_amount(method, qty, unit_price, item):
 | `weighbridge_diff_rule` | 磅差处理规则 |
 | `customer_measurement_preference` | 客户常用计量方式（学习） |
 
+### 5.70 Steel Domain Knowledge（钢铁领域深度知识 - v21 核心，深化 5.36）
+
+> 补全四块行业深层数据，决定"能不能成交、按什么成交、能不能替代"。
+
+**5.70.1 材质化学成分**
+
+```yaml
+ChemicalComposition:
+  grade, by_standard
+  range: { C, Si, Mn, P, S, Ceq, ... }   # 标准成分范围
+  customer_special:                       # 客户特殊要求（询价可指定）
+    P_max, S_max, Ceq_max, ...
+```
+
+- 碳当量 Ceq = C + Mn/6 + (Cr+Mo+V)/5 + (Ni+Cu)/15
+- 询价可带成分要求 → 满足的货源/钢厂才报
+- 替代料兼容（5.37）：替代品成分必须满足客户要求
+- 材质书（5.60）：报实际成分（一炉一证）
+
+**5.70.2 钢厂执行标准差异**
+
+```yaml
+MillStandard:
+  mill, grade
+  executed_standard: GB/行标/企标
+  internal_control: {...}   # 内控（常严于国标）
+  premium_note
+```
+
+- 询价"标准"要素 = 执行标准 + 内控
+- 内控严的钢厂可溢价
+- 替代料：标准兼容性判断（5.37）
+
+**5.70.3 捆重件重**
+
+```yaml
+BundlePieceWeight:
+  category, spec
+  package: 捆 | 件 | 支
+  nominal_weight_per_bundle
+  pieces_per_bundle
+  allow_partial_bundle: bool   # 拆捆（企业可配）
+  split_fee
+```
+
+- 抄牌（5.69）= 按捆/件牌标称重量
+- 点支/件数 ↔ 重量换算
+- 库存按捆件、发货整捆优先、拆捆规则可配
+
+**5.70.4 余尺负差**
+
+```yaml
+NegativeTolerance:
+  category
+  weight_tolerance_by_spec:    # 国标允许偏差
+    "6-12mm": {neg: -6%}
+    "14-20mm": {neg: -5%}
+    ">=22mm": {neg: -4%}
+  trade_convention:            # 交易约定（可配）
+    mode: 理论计价 | 负差让利 | 过磅实称
+    negative_diff_discount
+  surplus_length: { handling }  # 余尺处理
+```
+
+- 与计量（5.69）+ 磅单为准（v20）联动
+- 负差让利作为报价/让步因素
+- 客户对负差敏感 → 销售卖点（"负差小/给负差让利"）
+
+**5.70.5 数据来源与维护（v21 待决策落地）**
+
+- 化学成分标准 / 钢厂内控：行业标准导入 + 业务部/技术部维护（参考钢厂质保书）
+- 负差范围：国标导入；负差交易约定企业可配
+- 捆件重：行业标准 + 企业可调
+- 余尺处理：企业可配默认规则
+
+**5.70.6 与各模块联动**
+
+| 模块 | 联动 |
+|---|---|
+| Inquiry Parser（5.12） | 识别化学成分要求 / 执行标准 / 负差约定 |
+| 替代料 Match（5.37） | 成分 + 标准兼容性硬约束（不兼容不可替） |
+| 材质书（5.60） | 化学成分 + 执行标准 |
+| 计量（5.69） | 捆重件重（抄牌/点支）+ 负差（理计/过磅） |
+| Price Composition（5.66） | 负差让利 / 特殊成分溢价 / 内控溢价 / 拆捆费 |
+| 自我学习（5.40） | 学客户对成分/标准/负差的偏好 |
+
+**5.70.7 新增存储**
+
+| 表 | 用途 |
+|---|---|
+| `chemical_composition_standard` | 牌号标准化学成分 |
+| `mill_standard` | 钢厂×牌号执行标准+内控 |
+| `bundle_piece_weight` | 捆重件重 |
+| `negative_tolerance_rule` | 负差范围+交易约定 |
+| `surplus_length_rule` | 余尺处理规则 |
+| `customer_quality_preference` | 客户成分/标准/负差偏好（学习） |
+
 ---
 
