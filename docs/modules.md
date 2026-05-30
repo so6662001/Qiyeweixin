@@ -2461,12 +2461,31 @@ NegativeTolerance:
 - 负差让利作为报价/让步因素
 - 客户对负差敏感 → 销售卖点（"负差小/给负差让利"）
 
-**5.70.5 数据来源与维护（v21 待决策落地）**
+**5.70.5 数据来源与维护（v22 决策落地）**
 
-- 化学成分标准 / 钢厂内控：行业标准导入 + 业务部/技术部维护（参考钢厂质保书）
-- 负差范围：国标导入；负差交易约定企业可配
-- 捆件重：行业标准 + 企业可调
-- 余尺处理：企业可配默认规则
+- 化学成分标准 / 钢厂内控：**业务部 + 技术部维护**（参考钢厂质保书）
+- 负差范围：国标导入；**负差交易约定企业按品类配置**（mode: 理论计价/负差让利/过磅）
+- 捆件重：行业标准 + 企业可调；**拆捆是否允许 + 拆捆费按品类配置**
+- 余尺处理：**企业按品类设默认值 + 销售单据级可调**
+
+```yaml
+# v22 配置粒度：按品类 + 余尺销售可覆盖
+negative_tolerance_config:        # 按品类
+  螺纹钢: { mode: 负差让利, negative_diff_discount: 20 }
+  H型钢:  { mode: 理论计价 }
+  无缝管: { mode: 过磅 }
+bundle_split_config:              # 按品类
+  螺纹钢: { allow_partial: false, split_fee: 0 }
+  线材:   { allow_partial: false }
+  型钢:   { allow_partial: true, split_fee: 30 }
+surplus_length_config:            # 企业按品类默认 + 销售单据级可调
+  螺纹钢:
+    default: { handling: 按定尺 }
+    sales_override_allowed: true   # 销售每单可调
+  中厚板:
+    default: { handling: 余尺让利, discount: 50 }
+    sales_override_allowed: true
+```
 
 **5.70.6 与各模块联动**
 
@@ -2486,8 +2505,10 @@ NegativeTolerance:
 | `chemical_composition_standard` | 牌号标准化学成分 |
 | `mill_standard` | 钢厂×牌号执行标准+内控 |
 | `bundle_piece_weight` | 捆重件重 |
-| `negative_tolerance_rule` | 负差范围+交易约定 |
-| `surplus_length_rule` | 余尺处理规则 |
+| `negative_tolerance_rule` | 负差范围+交易约定（按品类 v22） |
+| `bundle_split_rule` | 拆捆规则+拆捆费（按品类 v22） |
+| `surplus_length_rule` | 余尺处理规则（企业按品类默认 v22） |
+| `order_surplus_override` | 余尺销售单据级覆盖记录（v22） |
 | `customer_quality_preference` | 客户成分/标准/负差偏好（学习） |
 
 ---
